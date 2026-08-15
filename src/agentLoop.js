@@ -1,7 +1,23 @@
 // agentLoop.js — Core Agent Turn Loop Engine (ESM, No classes)
+import readline from 'readline';
 import { createProvider } from './providers/providerManager.js';
 import { buildMessages } from './promptBuilder.js';
 import * as agentState from './agentState.js';
+
+function internalCliPrompt(toolName, toolArgs) {
+  return new Promise(function(resolve) {
+    if (typeof process === 'undefined' || !process.stdin || !process.stdout) {
+      return resolve(false);
+    }
+    var rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    var argStr = JSON.stringify(toolArgs || {});
+    rl.question('\n⚠️ [PERMISSION REQUEST] Allow agent to execute "' + toolName + '" ' + argStr + '? (y/n): ', function(ans) {
+      rl.close();
+      var isYes = String(ans || '').trim().toLowerCase().startsWith('y');
+      resolve(isYes);
+    });
+  });
+}
 
 export async function runAgentLoop(userPrompt, config, options) {
   options = options || {};
@@ -86,10 +102,6 @@ export async function runAgentLoop(userPrompt, config, options) {
 
       // Check if tool calls exist
       if (toolCalls.length > 0) {
-        for (var i = 0; i < toolCalls.length; i++) {
-          accumulatedToolCalls.push(toolCalls[i]);
-        }
-
         // Add assistant message with tool calls to history
         history.push({
           role: 'assistant',
@@ -104,12 +116,36 @@ export async function runAgentLoop(userPrompt, config, options) {
 
           emitEvent({ type: 'tool_call', tool: toolName, args: toolArgs, id: tc.id });
 
-          // Permission check
+          // Lookup tool definition to check if needsApproval is set
+          var toolDef = null;
+          for (var td = 0; td < toolsDefinition.length; td++) {
+            var def = toolsDefinition[td];
+            var nameInDef = (def.function && def.function.name) ? def.function.name : (def.name || '');
+            if (nameInDef === toolName) {
+              toolDef = def;
+              break;
+            }
+          }
+
+          var requiresApproval = false;
+          if (toolDef) {
+            if (toolDef.needsApproval === true || toolDef.requiresApproval === true) {
+              requiresApproval = true;
+            } else if (toolDef.function && (toolDef.function.needsApproval === true || toolDef.function.requiresApproval === true)) {
+              requiresApproval = true;
+            }
+          }
+
+          // Permission check — only ask if tool requires approval
           var approved = true;
-          if (typeof askPermission === 'function') {
+          if (requiresApproval) {
             agentState.transition('waiting', { tool: toolName, args: toolArgs });
             emitEvent({ type: 'state_changed', state: 'waiting' });
-            approved = await askPermission(toolName, toolArgs, tc.id);
+            if (typeof askPermission === 'function') {
+              approved = await askPermission(toolName, toolArgs, tc.id);
+            } else {
+              approved = await internalCliPrompt(toolName, toolArgs);
+            }
           }
 
           agentState.transition('executing', { tool: toolName, args: toolArgs });
@@ -118,8 +154,15 @@ export async function runAgentLoop(userPrompt, config, options) {
           var toolResult = null;
           if (approved) {
             try {
-              if (typeof executeTool === 'function') {
-                toolResult = await executeTool(toolName, toolArgs, { workspaceFolder: workspace });
+              if (options.toolsMap && options.toolsMap[toolName] && typeof options.toolsMap[toolName].execute === 'function') {
+                var execRes = await options.toolsMap[toolName].execute(toolArgs, { workspaceFolder: workspace, needsApproval: requiresApproval });
+                toolResult = {
+                  toolName: toolName,
+                  args: toolArgs,
+                  output: { success: true, content: typeof execRes === 'string' ? execRes : JSON.stringify(execRes) }
+                };
+              } else if (typeof executeTool === 'function') {
+                toolResult = await executeTool(toolName, toolArgs, { workspaceFolder: workspace, needsApproval: requiresApproval });
               } else {
                 toolResult = {
                   toolName: toolName,
@@ -138,11 +181,18 @@ export async function runAgentLoop(userPrompt, config, options) {
             toolResult = {
               toolName: toolName,
               args: toolArgs,
-              output: { success: false, error: 'Permission denied by user', content: 'Permission denied by user' }
+              output: { success: false, error: 'Permission denied by user', content: 'Permission denied by user. Do NOT retry calling this tool. Stop and inform the user that permission was denied.' }
             };
           }
 
           emitEvent({ type: 'tool_result', tool: toolName, result: toolResult, id: tc.id });
+
+          accumulatedToolCalls.push({
+            id: tc.id,
+            name: toolName,
+            args: toolArgs,
+            output: toolResult ? toolResult.output : null
+          });
 
           // Append tool execution result to history
           var resultString = typeof toolResult.output.content === 'string' ?
@@ -171,7 +221,6 @@ export async function runAgentLoop(userPrompt, config, options) {
 
         agentState.transition('completed', { content: finalContent });
         emitEvent({ type: 'state_changed', state: 'completed' });
-        emitEvent({ type: 'done', content: finalContent, thinking: accumulatedReasoning, toolCalls: accumulatedToolCalls, usage: totalUsage });
 
         return {
           success: true,

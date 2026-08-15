@@ -3,14 +3,14 @@ import OpenAI from 'openai';
 
 export function chat(messages, options) {
   options = options || {};
-  var apiKey = options.apiKey || process.env.OPENAI_API_KEY || 'ollama';
+  var apiKey = options.apiKey || process.env.OPENAI_API_KEY;
   var baseURL = options.baseUrl || options.baseURL || undefined;
-  var model = options.model || 'gpt-4o';
+  var model = options.model;
   var isStream = options.stream === true;
   var tools = options.tools || undefined;
   var onStream = options.onStream;
 
-  var client = new OpenAI({
+  var client = options.client || new OpenAI({
     apiKey: apiKey,
     baseURL: baseURL,
     dangerouslyAllowSVG: true

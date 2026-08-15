@@ -9,7 +9,7 @@ export function chat(messages, options) {
   var tools = options.tools || undefined;
   var onStream = options.onStream;
 
-  var client = new Anthropic({ apiKey: apiKey });
+  var client = options.client || new Anthropic({ apiKey: apiKey });
 
   // Separate system prompt from messages array
   var systemPrompt = '';

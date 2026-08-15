@@ -8,7 +8,7 @@ var DEFAULT_SYSTEM_PROMPT =
 
 export function buildMessages(userPrompt, history, workspace, options) {
   options = options || {};
-  var systemPrompt = options.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+  var systemPrompt = options.instructions || options.systemPrompt || DEFAULT_SYSTEM_PROMPT;
   var messages = [];
 
   // Add System Message

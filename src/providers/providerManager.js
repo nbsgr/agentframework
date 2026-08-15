@@ -1,51 +1,24 @@
-// providerManager.js — Dedicated provider routing manager (ESM, No classes)
-import * as providerOllama from './providerOllama.js';
+// providerManager.js — Unified Provider Router (ESM, No classes)
 import * as providerOpenAI from './providerOpenAI.js';
 import * as providerAnthropic from './providerAnthropic.js';
-import * as providerGemini from './providerGemini.js';
-import * as providerGroq from './providerGroq.js';
-import * as providerOpenRouter from './providerOpenRouter.js';
-import * as providerCompatible from './providerCompatible.js';
 
 export function createProvider(config) {
-  if (!config || typeof config !== 'object') {
-    return providerOllama;
+  var p = String((config && config.provider) || 'openai').toLowerCase();
+
+  if (p === 'anthropic') {
+    return providerAnthropic;
   }
 
-  var p = String(config.provider || 'ollama').toLowerCase();
-
-  switch (p) {
-    case 'ollama':
-      return providerOllama;
-    case 'openai':
-      return providerOpenAI;
-    case 'anthropic':
-      return providerAnthropic;
-    case 'gemini':
-      return providerGemini;
-    case 'groq':
-      return providerGroq;
-    case 'openrouter':
-      return providerOpenRouter;
-    case 'xai':
-    case 'compatible':
-      return providerCompatible;
-    default:
-      return providerOllama;
-  }
+  // All OpenAI-Compatible Providers (Ollama, OpenCode, DeepSeek, Gemini, Groq, OpenRouter, Custom)
+  return providerOpenAI;
 }
 
 export function getProviderName(config) {
-  if (!config) return 'ollama';
-  return config.provider || 'ollama';
+  if (!config) return 'openai';
+  return config.provider || 'openai';
 }
 
 export {
-  providerOllama,
   providerOpenAI,
-  providerAnthropic,
-  providerGemini,
-  providerGroq,
-  providerOpenRouter,
-  providerCompatible
+  providerAnthropic
 };
