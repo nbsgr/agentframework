@@ -1,6 +1,6 @@
 // index.js — Main library entry point for coderun-agent (ESM, No classes)
 import { runAgentLoop } from './src/agentLoop.js';
-import { createProvider, getProviderName } from './src/providers/providerManager.js';
+import { createProvider } from './src/providers/providerManager.js';
 import { getState, onStateChange, resetState } from './src/agentState.js';
 import { createClient } from './src/client.js';
 import { tool, validateTools, agentToTool } from './src/tools.js';
@@ -20,9 +20,19 @@ export function createAgent(config) {
   var stream = config.stream !== undefined ? Boolean(config.stream) : true;
   var workspace = typeof config.workspace === 'string' ? config.workspace : process.cwd();
 
-  // 3. Validate tools parameter
+  // 3. Validate permissionHandler requirement if needsApproval is configured
+  var globalApproval = config.needsApproval;
+  var globalPermissionHandler = config.permissionHandler || config.askPermission;
+
+  if (globalApproval) {
+    if (typeof globalPermissionHandler !== 'function') {
+      throw new Error('permissionHandler function is required when needsApproval is configured.');
+    }
+  }
+
+  // 4. Validate tools parameter
   var rawTools = config.tools;
-  var validatedTools = validateTools(rawTools);
+  var validatedTools = validateTools(rawTools, globalApproval);
 
   var internalHistory = Array.isArray(config.history) ? config.history.slice() : [];
   var internalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
@@ -43,7 +53,14 @@ export function createAgent(config) {
 
     var currentHistory = runOptions.history || internalHistory;
     var runToolsInput = runOptions.tools || rawTools;
-    var runValidatedTools = validateTools(runToolsInput);
+    var runApproval = runOptions.needsApproval !== undefined ? runOptions.needsApproval : globalApproval;
+    var runPermissionHandler = runOptions.permissionHandler || runOptions.askPermission || globalPermissionHandler;
+
+    if (runApproval && typeof runPermissionHandler !== 'function') {
+      throw new Error('permissionHandler function is required when needsApproval is configured.');
+    }
+
+    var runValidatedTools = validateTools(runToolsInput, runApproval);
 
     var mergedRunOptions = {
       workspace: runOptions.workspace || workspace,
@@ -55,7 +72,8 @@ export function createAgent(config) {
       toolsMap: runValidatedTools.toolsMap,
       executeTool: runValidatedTools.executeTool || runOptions.executeTool || config.executeTool,
       onEvent: runOptions.onEvent || config.onEvent,
-      askPermission: runOptions.askPermission || config.askPermission
+      permissionHandler: runPermissionHandler,
+      askPermission: runPermissionHandler
     };
 
     return runAgentLoop(prompt, mergedConfig, mergedRunOptions).then(function(result) {
@@ -108,4 +126,5 @@ export function createAgent(config) {
   };
 }
 
-export { getState, onStateChange, resetState, createProvider, getProviderName, createClient, tool, validateTools, agentToTool };
+// Clean Public Exports (Internal helpers createClient & validateTools omitted from public exports)
+export { tool, agentToTool, getState, onStateChange, resetState };

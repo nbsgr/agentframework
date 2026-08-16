@@ -24,9 +24,8 @@ export async function runAgentLoop(userPrompt, config, options) {
   var workspace = options.workspace || process.cwd();
   var history = options.history || [];
   var maxIterations = options.maxIterations || 25;
-  var isStream = options.stream === true;
   var onEvent = options.onEvent;
-  var askPermission = options.askPermission;
+  var permissionHandler = options.permissionHandler || options.askPermission;
   var executeTool = options.executeTool;
   var toolsDefinition = options.tools || [];
 
@@ -140,9 +139,9 @@ export async function runAgentLoop(userPrompt, config, options) {
           var approved = true;
           if (requiresApproval) {
             agentState.transition('waiting', { tool: toolName, args: toolArgs });
-            emitEvent({ type: 'state_changed', state: 'waiting' });
-            if (typeof askPermission === 'function') {
-              approved = await askPermission(toolName, toolArgs, tc.id);
+            emitEvent({ type: 'state_changed', state: 'waiting', tool: toolName, args: toolArgs, id: tc.id });
+            if (typeof permissionHandler === 'function') {
+              approved = await permissionHandler(toolName, toolArgs, tc.id);
             } else {
               approved = await internalCliPrompt(toolName, toolArgs);
             }

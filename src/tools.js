@@ -1,4 +1,4 @@
-// tools.js — Helper and Validator for OpenAI Agents SDK style tools, Zod schemas & Subagents as tools (ESM, No classes)
+// tools.js — Helper and Validator for OpenAI Agents SDK style tools, Zod schemas, coderun-tools & Subagents as tools (ESM, No classes)
 
 function parseParameters(params) {
   if (!params) return { type: 'object', properties: {} };
@@ -49,11 +49,33 @@ function zodToJsonSchema(zodSchema) {
 }
 
 export function tool(toolConfig) {
-  if (!toolConfig || typeof toolConfig !== 'object') {
+  if (!toolConfig) {
     throw new Error('tool() requires a configuration object.');
   }
 
-  var name = (toolConfig.function && toolConfig.function.name) ? toolConfig.function.name : toolConfig.name;
+  if (typeof toolConfig === 'function') {
+    var fnName = toolConfig.name || 'custom_tool';
+    var snakeName = fnName.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '');
+    var def = toolConfig.definition ? toolConfig.definition.function : null;
+    return tool({
+      name: def ? def.name : snakeName,
+      description: def ? def.description : (fnName + ' tool'),
+      parameters: def ? def.parameters : { type: 'object', properties: {} },
+      needsApproval: toolConfig.needsApproval === true || (def && def.needsApproval === true),
+      execute: toolConfig
+    });
+  }
+
+  if (typeof toolConfig !== 'object') {
+    throw new Error('tool() requires a configuration object.');
+  }
+
+  var name = (toolConfig.function && toolConfig.function.name) ?
+    toolConfig.function.name :
+    ((toolConfig.definition && toolConfig.definition.function && toolConfig.definition.function.name) ?
+      toolConfig.definition.function.name :
+      toolConfig.name);
+
   if (!name || typeof name !== 'string' || !name.trim()) {
     throw new Error('Tool must have a valid non-empty "name".');
   }
@@ -63,23 +85,34 @@ export function tool(toolConfig) {
     needsApproval = true;
   } else if (toolConfig.function && (toolConfig.function.needsApproval === true || toolConfig.function.requiresApproval === true)) {
     needsApproval = true;
+  } else if (toolConfig.definition && (toolConfig.definition.needsApproval === true || toolConfig.definition.requiresApproval === true)) {
+    needsApproval = true;
   }
 
-  var rawParams = toolConfig.parameters || (toolConfig.function ? toolConfig.function.parameters : null);
+  var rawParams = toolConfig.parameters ||
+    (toolConfig.function ? toolConfig.function.parameters :
+    (toolConfig.definition && toolConfig.definition.function ? toolConfig.definition.function.parameters : null));
   var jsonParams = parseParameters(rawParams);
 
-  var execFn = typeof toolConfig.execute === 'function' ? toolConfig.execute : (typeof toolConfig.function === 'function' ? toolConfig.function : null);
+  var rawDesc = toolConfig.description ||
+    (toolConfig.function ? toolConfig.function.description :
+    (toolConfig.definition && toolConfig.definition.function ? toolConfig.definition.function.description : ''));
+
+  var execFn = typeof toolConfig.execute === 'function' ? toolConfig.execute :
+    (typeof toolConfig.handler === 'function' ? toolConfig.handler :
+    (typeof toolConfig.function === 'function' ? toolConfig.function : null));
 
   return {
     name: name.trim(),
-    description: toolConfig.description || (toolConfig.function ? toolConfig.function.description : '') || '',
+    description: rawDesc || '',
     needsApproval: needsApproval,
     parameters: jsonParams,
     execute: execFn,
+    handler: execFn,
     type: 'function',
     function: {
       name: name.trim(),
-      description: toolConfig.description || (toolConfig.function ? toolConfig.function.description : '') || '',
+      description: rawDesc || '',
       parameters: jsonParams
     }
   };
@@ -110,7 +143,7 @@ export function agentToTool(agentInstance) {
   });
 }
 
-export function validateTools(toolsInput) {
+export function validateTools(toolsInput, globalApprovalConfig) {
   if (!toolsInput) return { definitions: [], executeTool: null, toolsMap: {} };
 
   var rawList = [];
@@ -136,11 +169,11 @@ export function validateTools(toolsInput) {
   for (var i = 0; i < rawList.length; i++) {
     var rawTool = rawList[i];
     
-    // Automatically convert Subagent instances to tools!
+    // Automatically convert Subagent instances or raw tool functions/modules to standard tools!
     var t = null;
     if (rawTool && typeof rawTool.run === 'function') {
       t = agentToTool(rawTool);
-    } else if (typeof rawTool === 'object' && rawTool.name) {
+    } else if (typeof rawTool === 'function' || (typeof rawTool === 'object' && (rawTool.name || (rawTool.function && rawTool.function.name) || (rawTool.definition && rawTool.definition.function && rawTool.definition.function.name)))) {
       t = tool(rawTool);
     } else {
       t = rawTool;
@@ -148,19 +181,35 @@ export function validateTools(toolsInput) {
 
     if (!t) continue;
 
+    var toolName = t.name || (t.function ? t.function.name : '');
+
+    var isApprovalRequired = t.needsApproval === true;
+    if (globalApprovalConfig === true) {
+      isApprovalRequired = true;
+    } else if (Array.isArray(globalApprovalConfig) && toolName && globalApprovalConfig.indexOf(toolName) >= 0) {
+      isApprovalRequired = true;
+    }
+
     definitions.push({
       type: 'function',
-      needsApproval: t.needsApproval === true, // Default false!
+      needsApproval: isApprovalRequired,
       function: {
-        name: t.name || (t.function ? t.function.name : ''),
+        name: toolName,
         description: t.description || (t.function ? t.function.description : ''),
         parameters: t.parameters || (t.function ? t.function.parameters : { type: 'object', properties: {} })
       }
     });
 
-    var toolName = t.name || (t.function ? t.function.name : '');
     if (toolName) {
+      t.needsApproval = isApprovalRequired;
       toolsMap[toolName] = t;
+
+      // Register aliases for camelCase vs snake_case naming (e.g. deleteFile <-> delete_file)!
+      var camelName = toolName.replace(/_([a-z])/g, function(_, letter) { return letter.toUpperCase(); });
+      var snakeName = toolName.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '');
+      
+      toolsMap[camelName] = t;
+      toolsMap[snakeName] = t;
     }
   }
 

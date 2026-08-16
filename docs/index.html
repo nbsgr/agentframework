@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CodeRun Agents SDK — Documentation & Developer Guide</title>
+  <style>
+    /* ── Dark Theme Documentation Styling (Matching OpenAI Agents SDK Docs) ── */
+    :root {
+      --bg-dark: #0b0c0e;
+      --bg-sidebar: #131417;
+      --bg-card: #191a1e;
+      --bg-code: #0f1013;
+      --border-color: #26282e;
+      --text-main: #f0f0f2;
+      --text-muted: #94969e;
+      --accent-blue: #3b82f6;
+      --accent-cyan: #06b6d4;
+      --accent-green: #10b981;
+      --accent-amber: #f59e0b;
+      --font-mono: 'Cascadia Code', 'Consolas', 'Fira Code', 'Courier New', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      line-height: 1.65;
+    }
+
+    /* Top Navigation Header */
+    header.top-nav {
+      height: 64px;
+      border-bottom: 1px solid var(--border-color);
+      background-color: rgba(19, 20, 23, 0.85);
+      backdrop-filter: blur(12px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 19px;
+      letter-spacing: -0.3px;
+    }
+    .brand span.badge {
+      background: rgba(59, 130, 246, 0.15);
+      color: var(--accent-blue);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      padding: 3px 10px;
+      border-radius: 14px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .search-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 7px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-muted);
+      font-size: 13px;
+      width: 280px;
+    }
+
+    /* Main Container Layout */
+    .doc-container {
+      display: flex;
+      flex: 1;
+    }
+
+    /* Sidebar Navigation */
+    nav.sidebar {
+      width: 270px;
+      border-right: 1px solid var(--border-color);
+      background-color: var(--bg-sidebar);
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      position: sticky;
+      top: 64px;
+      height: calc(100vh - 64px);
+      overflow-y: auto;
+    }
+
+    .nav-section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+      font-weight: 700;
+      margin-top: 14px;
+      margin-bottom: 6px;
+    }
+
+    .nav-link {
+      display: block;
+      padding: 7px 12px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 13.5px;
+      border-radius: 6px;
+      transition: all 0.15s ease;
+    }
+    .nav-link:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .nav-link.active {
+      color: var(--accent-blue);
+      background: rgba(59, 130, 246, 0.12);
+      font-weight: 600;
+    }
+
+    /* Content Area */
+    main.content {
+      flex: 1;
+      max-width: 880px;
+      padding: 44px 56px;
+      margin: 0 auto;
+    }
+
+    /* Right TOC Table of Contents */
+    aside.toc {
+      width: 250px;
+      padding: 44px 24px;
+      position: sticky;
+      top: 64px;
+      height: calc(100vh - 64px);
+      font-size: 12.5px;
+      border-left: 1px solid rgba(255, 255, 255, 0.03);
+    }
+    .toc-title {
+      font-weight: 700;
+      color: var(--text-main);
+      margin-bottom: 14px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .toc-link {
+      display: block;
+      color: var(--text-muted);
+      text-decoration: none;
+      padding: 5px 0;
+      line-height: 1.4;
+      transition: color 0.15s ease;
+    }
+    .toc-link:hover { color: var(--accent-blue); }
+
+    /* Typography & Sections */
+    h1 { font-size: 34px; font-weight: 800; margin-bottom: 14px; letter-spacing: -0.6px; }
+    h2 { font-size: 22px; font-weight: 700; margin-top: 48px; margin-bottom: 18px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; letter-spacing: -0.3px; }
+    h3 { font-size: 16px; font-weight: 600; margin-top: 28px; margin-bottom: 12px; color: var(--accent-cyan); }
+    p { margin-bottom: 16px; color: #d4d4d8; font-size: 15px; }
+    ul, ol { margin-bottom: 18px; padding-left: 24px; color: #d4d4d8; }
+    li { margin-bottom: 6px; }
+
+    /* Code Blocks */
+    pre {
+      background: var(--bg-code);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 18px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      overflow-x: auto;
+      margin: 18px 0;
+      color: #e6edf3;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    code {
+      font-family: var(--font-mono);
+      background: rgba(255, 255, 255, 0.08);
+      padding: 3px 7px;
+      border-radius: 4px;
+      font-size: 12.5px;
+      color: #58a6ff;
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 24px 0;
+      font-size: 13.5px;
+    }
+    th, td {
+      border: 1px solid var(--border-color);
+      padding: 12px 16px;
+      text-align: left;
+    }
+    th {
+      background-color: var(--bg-sidebar);
+      color: var(--text-main);
+      font-weight: 600;
+    }
+    td code { font-size: 12px; }
+
+    /* Badges & Alerts */
+    .alert {
+      padding: 16px 20px;
+      border-radius: 8px;
+      margin: 24px 0;
+      font-size: 14px;
+      border-left: 4px solid;
+    }
+    .alert-tip { background: rgba(16, 185, 129, 0.1); border-color: var(--accent-green); color: #a7f3d0; }
+    .alert-warning { background: rgba(245, 158, 11, 0.1); border-color: var(--accent-amber); color: #fde68a; }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header Navigation Bar -->
+  <header class="top-nav">
+    <div class="brand">
+      🤖 CodeRun Agents SDK <span class="badge">v1.0.1</span>
+    </div>
+    <div class="search-box">
+      🔍 Search documentation... <span style="margin-left:auto; font-size:10px; background:var(--bg-sidebar); padding:2px 6px; border-radius:4px;">Ctrl K</span>
+    </div>
+  </header>
+
+  <div class="doc-container">
+    <!-- Left Sidebar Navigation -->
+    <nav class="sidebar">
+      <div class="nav-section-title">Getting Started</div>
+      <a href="#overview" class="nav-link active">Overview</a>
+      <a href="#quickstart" class="nav-link">Quickstart</a>
+
+      <div class="nav-section-title">Core Guides</div>
+      <a href="#agents" class="nav-link">Agents & createAgent</a>
+      <a href="#tools" class="nav-link">Tools & Schemas</a>
+      <a href="#coderun-tools" class="nav-link">coderun-tools Integration</a>
+      <a href="#human-in-the-loop" class="nav-link">Human-in-the-Loop (HIL)</a>
+      <a href="#streaming" class="nav-link">Streaming & Reasoning</a>
+      <a href="#subagents" class="nav-link">Agents as Tools</a>
+
+      <div class="nav-section-title">API & Reference</div>
+      <a href="#providers" class="nav-link">Model Providers</a>
+      <a href="#options-reference" class="nav-link">Options Reference</a>
+      <a href="#results-reference" class="nav-link">Result Object Reference</a>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="content">
+      
+      <!-- Overview Section -->
+      <section id="overview">
+        <h1>CodeRun Agents SDK Overview</h1>
+        <p><strong>CodeRun Agents SDK</strong> (<code>coderun-agent</code>) is a standalone, lightweight, multi-provider AI Agent framework in plain JavaScript (ESM). It enables developers to build tool-augmented autonomous AI agents with real-time streaming, multi-agent delegation, and <strong>Human-in-the-Loop (HIL)</strong> safety approval workflows.</p>
+
+        <div class="alert alert-tip">
+          <strong>⚡ Pure Plain JavaScript (ESM):</strong> Written using strict traditional function declarations (<code>function name() {}</code>). Zero TypeScript compilation needed. Works natively in Node.js, Web Browsers, Electron, and server environments.
+        </div>
+      </section>
+
+      <!-- Quickstart Section -->
+      <section id="quickstart">
+        <h2>Quickstart</h2>
+        <p>Install <code>coderun-agent</code> via npm:</p>
+        <pre><code>npm install coderun-agent</code></pre>
+
+        <p>Initialize and execute your agent in 5 lines of code:</p>
+        <pre><code>import { createAgent } from 'coderun-agent';
+
+var agent = createAgent({
+  name: 'CodeAssistant',
+  instructions: 'You are a helpful software engineering assistant.',
+  provider: 'openai-compatible',
+  baseurl: 'http://localhost:11434/v1',
+  apikey: 'ollama',
+  model: 'qwen2.5-coder:7b'
+});
+
+agent.run('Write a function to reverse a string.').then(function(result) {
+  console.log(result.content);
+});</code></pre>
+      </section>
+
+      <!-- Agents & createAgent Section -->
+      <section id="agents">
+        <h2>Agents & <code>createAgent</code></h2>
+        <p>An agent is configured using a single configuration object passed to <code>createAgent(config)</code>. An agent instance exposes methods to execute prompts, inspect message history, track token usage, and manage lifecycle state.</p>
+
+        <h3>Agent Methods Reference</h3>
+        <ul>
+          <li><code>agent.run(prompt, runOptions)</code>: Executes a prompt turn loop. Returns a Promise resolving to a structured <code>result</code> object.</li>
+          <li><code>agent.getHistory()</code>: Returns the active conversation message history array.</li>
+          <li><code>agent.setHistory(newHistory)</code>: Overwrites the internal message history array.</li>
+          <li><code>agent.clearHistory()</code>: Clears conversation history for a fresh turn.</li>
+          <li><code>agent.getUsage()</code>: Returns cumulative token usage metrics (<code>prompt_tokens</code>, <code>completion_tokens</code>, <code>total_tokens</code>).</li>
+          <li><code>agent.resetContext()</code>: Resets history, usage, and reactive state.</li>
+        </ul>
+      </section>
+
+      <!-- Tools & Schemas Section -->
+      <section id="tools">
+        <h2>Tools & Schemas (<code>tool</code>)</h2>
+        <p>Define custom tools using the <code>tool</code> helper function. Tools accept standard JSON schema objects or <strong>Zod schemas</strong> (<code>z.object(...)</code>).</p>
+
+        <pre><code>import { tool } from 'coderun-agent';
+
+function executeWeather(args) {
+  var city = args ? args.city : 'Tokyo';
+  return Promise.resolve('Weather in ' + city + ' is sunny 25°C.');
+}
+
+var getWeatherTool = tool({
+  name: 'get_weather',
+  description: 'Get current weather for a city',
+  parameters: {
+    type: 'object',
+    properties: {
+      city: { type: 'string', description: 'City name e.g. Tokyo' }
+    },
+    required: ['city']
+  },
+  execute: executeWeather
+});</code></pre>
+      </section>
+
+      <!-- coderun-tools Integration Section -->
+      <section id="coderun-tools">
+        <h2>Built-in Tools (<code>coderun-tools</code>)</h2>
+        <p><code>coderun-agent</code> seamlessly accepts tools imported directly from <code>coderun-tools</code> (filesystem, terminal, search, datetime):</p>
+        <pre><code>import { createAgent } from 'coderun-agent';
+import { readFile, writeFile, executeCommand, listDirectory } from 'coderun-tools';
+
+var agent = createAgent({
+  name: 'DeveloperAgent',
+  provider: 'openai-compatible',
+  baseurl: 'http://localhost:11434/v1',
+  apikey: 'ollama',
+  model: 'qwen2.5-coder:7b',
+  
+  // 👈 Pass coderun-tools functions directly:
+  tools: [ readFile, writeFile, executeCommand, listDirectory ],
+  workspace: process.cwd()
+});</code></pre>
+      </section>
+
+      <!-- Human-in-the-Loop Section -->
+      <section id="human-in-the-loop">
+        <h2>Human-in-the-Loop (HIL) Security Guide</h2>
+        <p>Protect your environment from unauthorized operations (such as file deletion or terminal execution) using <strong>HIL Permission Controls</strong> (<code>needsApproval</code> + <code>permissionHandler</code>).</p>
+
+        <div class="alert alert-warning">
+          <strong>🛡️ Strict Validation Requirement:</strong> When <code>needsApproval</code> is configured (as a boolean or an array of tool names), passing a <code>permissionHandler</code> function is <strong>strictly mandatory</strong>. If missing, <code>createAgent</code> throws an explicit validation error: <code>Error: permissionHandler function is required when needsApproval is configured.</code>
+        </div>
+
+        <h3>1. Three Approval Configuration Modes</h3>
+        <ul>
+          <li><strong>Array of Tool Names:</strong> <code>needsApproval: ['delete_file', 'execute_command']</code> (Gates specific sensitive tools).</li>
+          <li><strong>Global Boolean:</strong> <code>needsApproval: true</code> (Gates ALL tools passed to the agent).</li>
+          <li><strong>Per-Tool Definition:</strong> <code>needsApproval: true</code> inside <code>tool({...})</code>.</li>
+        </ul>
+
+        <h3>2. How the User/UI Handlers Work</h3>
+        <p>When an agent encounters a tool requiring approval, it transitions state to <code>'waiting'</code>, emits <code>onEvent({ type: 'state_changed', state: 'waiting', tool, args, id })</code>, and invokes your custom <code>permissionHandler(toolName, args, toolId)</code>:</p>
+
+        <ul>
+          <li>User calls <strong><code>resolve(true)</code></strong> (or types <code>'y'</code>): Agent unfreezes, executes the tool on disk/terminal, and feeds output to LLM.</li>
+          <li>User calls <strong><code>resolve(false)</code></strong> (or types <code>'n'</code>): Agent unfreezes, <strong>blocks tool execution</strong>, and feeds <code>"Permission denied by user. Do NOT retry calling this tool."</code> to LLM.</li>
+        </ul>
+
+        <h3>HIL Implementation Code Example</h3>
+        <pre><code>function myPermissionHandler(toolName, args, toolId) {
+  return new Promise(function(resolve) {
+    console.log('⚠️ [PERMISSION ASKED] Tool:', toolName, 'Args:', args);
+
+    // Prompt user in Terminal CLI, HTML UI Modal, or React State:
+    var userAllowed = confirmUserPrompt(toolName, args);
+
+    if (userAllowed) {
+      resolve(true);  // 🟢 User ALLOWED execution!
+    } else {
+      resolve(false); // 🔴 User DENIED execution!
+    }
+  });
+}
+
+var agent = createAgent({
+  name: 'SecureAgent',
+  provider: 'openai-compatible',
+  baseurl: 'http://localhost:11434/v1',
+  apikey: 'ollama',
+  model: 'qwen2.5-coder:7b',
+  tools: [ deleteFile, executeCommand ],
+  
+  // 👈 Require approval for delete_file tool:
+  needsApproval: ['delete_file'],
+  
+  // 👈 Mandatory permissionHandler function:
+  permissionHandler: myPermissionHandler
+});</code></pre>
+      </section>
+
+      <!-- Streaming & Reasoning Section -->
+      <section id="streaming">
+        <h2>Streaming & Reasoning Tokens</h2>
+        <p>Enable <code>stream: true</code> to receive real-time reasoning/thinking tokens, response text, and tool execution events:</p>
+        <pre><code>function handleAgentEvent(evt) {
+  if (evt.type === 'thinking' && evt.chunk) {
+    process.stdout.write(evt.chunk); // 💭 Live reasoning tokens (DeepSeek / Qwen / Claude)
+  } else if (evt.type === 'stream' && evt.chunk) {
+    process.stdout.write(evt.chunk); // 💬 Live content tokens
+  } else if (evt.type === 'tool_call') {
+    console.log('🛠️ Tool Called:', evt.tool, evt.args);
+  } else if (evt.type === 'tool_result') {
+    console.log('✅ Tool Result:', evt.tool);
+  }
+}
+
+var agent = createAgent({
+  name: 'StreamAgent',
+  provider: 'compatible',
+  baseurl: 'https://opencode.ai/zen/v1',
+  apikey: 'YOUR_API_KEY',
+  model: 'deepseek-v4-flash-free',
+  tools: [ getWeatherTool ],
+  stream: true
+});
+
+agent.run('What is the weather in Tokyo?', { onEvent: handleAgentEvent });</code></pre>
+      </section>
+
+      <!-- Subagents as Tools Section -->
+      <section id="subagents">
+        <h2>Agents as Tools (Subagents)</h2>
+        <p>Pass any agent instance directly inside <code>tools: [ subAgent ]</code> to create hierarchical multi-agent delegation chains:</p>
+        <pre><code>var researcher = createAgent({
+  name: 'Researcher',
+  instructions: 'You research topics and summarize findings.',
+  provider: 'openai-compatible',
+  baseurl: 'http://localhost:11434/v1',
+  apikey: 'ollama',
+  model: 'qwen2.5-coder:7b'
+});
+
+var manager = createAgent({
+  name: 'Manager',
+  instructions: 'Delegate research tasks to the Researcher agent.',
+  provider: 'openai-compatible',
+  baseurl: 'http://localhost:11434/v1',
+  apikey: 'ollama',
+  model: 'qwen2.5-coder:7b',
+  tools: [ researcher ] // 👈 Automatically available as transfer_to_researcher tool!
+});</code></pre>
+      </section>
+
+      <!-- Model Providers Section -->
+      <section id="providers">
+        <h2>Model Providers</h2>
+        <p><code>coderun-agent</code> connects to any LLM endpoint via standard provider drivers:</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Provider Name</th>
+              <th>BaseURL Format</th>
+              <th>Example Model</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>openai-compatible</code></td>
+              <td><code>http://localhost:11434/v1</code></td>
+              <td><code>qwen2.5-coder:7b</code> (Ollama)</td>
+            </tr>
+            <tr>
+              <td><code>openai-compatible</code></td>
+              <td><code>https://opencode.ai/zen/v1</code></td>
+              <td><code>deepseek-v4-flash-free</code> (OpenCode)</td>
+            </tr>
+            <tr>
+              <td><code>openai-compatible</code></td>
+              <td><code>https://api.openai.com/v1</code></td>
+              <td><code>gpt-4o</code> (OpenAI)</td>
+            </tr>
+            <tr>
+              <td><code>anthropic</code></td>
+              <td>Direct SDK Connection</td>
+              <td><code>claude-3-5-sonnet-20241022</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Options Reference Section -->
+      <section id="options-reference">
+        <h2>Options Reference Table</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Required</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>name</code></td>
+              <td>No</td>
+              <td>Defaults to function/agent name (e.g. <code>"Agent"</code>).</td>
+            </tr>
+            <tr>
+              <td><code>instructions</code></td>
+              <td>No</td>
+              <td>System prompt/instructions shown to the LLM.</td>
+            </tr>
+            <tr>
+              <td><code>provider</code></td>
+              <td>Yes</td>
+              <td><code>"openai-compatible"</code> or <code>"anthropic"</code>.</td>
+            </tr>
+            <tr>
+              <td><code>baseurl</code></td>
+              <td>Yes</td>
+              <td>HTTP endpoint URL.</td>
+            </tr>
+            <tr>
+              <td><code>apikey</code></td>
+              <td>Yes</td>
+              <td>API key or bearer token.</td>
+            </tr>
+            <tr>
+              <td><code>model</code></td>
+              <td>Yes</td>
+              <td>Model string identifier.</td>
+            </tr>
+            <tr>
+              <td><code>tools</code></td>
+              <td>No</td>
+              <td>Array of tools (custom tools, <code>coderun-tools</code>, or subagents).</td>
+            </tr>
+            <tr>
+              <td><code>needsApproval</code></td>
+              <td>No</td>
+              <td>Approval policy: <code>true</code> or array of tool names <code>['delete_file']</code>.</td>
+            </tr>
+            <tr>
+              <td><code>permissionHandler</code></td>
+              <td>Conditional</td>
+              <td>Mandatory function when <code>needsApproval</code> is set: <code>function(toolName, args, id)</code> returning <code>true</code> or <code>false</code>.</td>
+            </tr>
+            <tr>
+              <td><code>stream</code></td>
+              <td>No</td>
+              <td>Boolean indicating if streaming is enabled (default: <code>true</code>).</td>
+            </tr>
+            <tr>
+              <td><code>workspace</code></td>
+              <td>No</td>
+              <td>Workspace directory path (defaults to <code>process.cwd()</code>).</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Results Reference Section -->
+      <section id="results-reference">
+        <h2>Result Object Reference Table</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Type</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>success</code></td>
+              <td>Boolean</td>
+              <td>Indicates clean completion of the agent turn loop.</td>
+            </tr>
+            <tr>
+              <td><code>content</code></td>
+              <td>String</td>
+              <td>Final text answer generated by the assistant.</td>
+            </tr>
+            <tr>
+              <td><code>thinking</code></td>
+              <td>String</td>
+              <td>Accumulated reasoning/thinking tokens.</td>
+            </tr>
+            <tr>
+              <td><code>toolCalls</code></td>
+              <td>Array</td>
+              <td>Array of executed tool objects: <code>[{ id, name, args, output }]</code>.</td>
+            </tr>
+            <tr>
+              <td><code>usage</code></td>
+              <td>Object</td>
+              <td>Token consumption: <code>{ prompt_tokens, completion_tokens, total_tokens }</code>.</td>
+            </tr>
+            <tr>
+              <td><code>history</code></td>
+              <td>Array</td>
+              <td>Updated message history array.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+    </main>
+
+    <!-- Right Table of Contents Sidebar -->
+    <aside class="toc">
+      <div class="toc-title">On this page</div>
+      <a href="#overview" class="toc-link">Overview</a>
+      <a href="#quickstart" class="toc-link">Quickstart</a>
+      <a href="#agents" class="toc-link">Agents & createAgent</a>
+      <a href="#tools" class="toc-link">Tools & Schemas</a>
+      <a href="#coderun-tools" class="toc-link">coderun-tools Integration</a>
+      <a href="#human-in-the-loop" class="toc-link">Human-in-the-Loop (HIL)</a>
+      <a href="#streaming" class="toc-link">Streaming & Reasoning</a>
+      <a href="#subagents" class="toc-link">Agents as Tools</a>
+      <a href="#providers" class="toc-link">Model Providers</a>
+      <a href="#options-reference" class="toc-link">Options Reference</a>
+      <a href="#results-reference" class="toc-link">Result Reference</a>
+    </aside>
+  </div>
+
+</body>
+</html>
