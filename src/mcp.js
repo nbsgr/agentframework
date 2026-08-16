@@ -131,7 +131,7 @@ export async function connectMcpServer(config) {
 
   var client = new clientModule.Client({
     name: config.clientName || 'coderun-agent',
-    version: config.clientVersion || '1.0.3'
+    version: config.clientVersion || '1.0.4'
   });
   var transport = await createMcpTransport(config);
   await client.connect(transport);

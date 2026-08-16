@@ -3,7 +3,7 @@ import { createAgent, tool } from '../index.js';
 
 function createLiveTool() {
   function getProjectStatus(args) {
-    return 'The project is coderun-agent version 1.0.3 and the live tool executed successfully.';
+    return 'The project is coderun-agent version 1.0.4 and the live tool executed successfully.';
   }
 
   return tool({

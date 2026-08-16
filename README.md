@@ -3,7 +3,24 @@
 > Lightweight, multi-provider AI Agent framework in plain JavaScript. Build autonomous, tool-augmented AI agents with real-time streaming, subagent delegation, and Human-in-the-Loop (HITL) permission controls.
 
 [![npm version](https://img.shields.io/npm/v/coderun-agent.svg)](https://www.npmjs.com/package/coderun-agent)
-[![license](https://img.shields.io/npm/l/coderun-agent.svg)](https://github.com/coderun-agent/coderun-agent/blob/main/LICENSE)
+[![license](https://img.shields.io/npm/l/coderun-agent.svg)](https://github.com/nbsgr/agentframework/blob/main/LICENSE)
+[![Documentation](https://img.shields.io/badge/documentation-GitHub%20Pages-222222)](https://nbsgr.github.io/agentframework/)
+
+---
+
+## 📚 Documentation
+
+Read the complete API reference, provider examples, MCP integration guide, and
+usage documentation on the live documentation site:
+
+[https://nbsgr.github.io/agentframework/](https://nbsgr.github.io/agentframework/)
+
+The documentation is published from the repository's `docs` folder using
+GitHub Pages.
+
+Source code and issue tracking are available in the GitHub repository:
+
+[https://github.com/nbsgr/agentframework](https://github.com/nbsgr/agentframework)
 
 ---
 
@@ -407,4 +424,4 @@ If the loop stops because `maxIterations` is reached, the result has `success: f
 
 ## 📄 License
 
-MIT © [CodeRun Agent](https://github.com/coderun-agent)
+MIT © [CodeRun Agent](https://github.com/nbsgr/agentframework)
