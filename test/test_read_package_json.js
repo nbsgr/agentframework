@@ -17,13 +17,13 @@ async function testReadPackageJson() {
     executeTool: coderunTools.executeTool
   });
 
-  agent.onStateChange(function(evt) {
+  agent.onStateChange(function handleStateChange(evt) {
     console.log('🔄 [STATE]', evt.fromState, '➜', evt.toState);
   });
 
   var result = await agent.run('Use the read_file tool to read package.json and summarize its name, version, and dependencies.', {
     workspace: process.cwd(),
-    onEvent: function(evt) {
+    onEvent: function handleEvent(evt) {
       if (evt.type === 'stream') {
         process.stdout.write(evt.chunk);
       } else if (evt.type === 'tool_call') {

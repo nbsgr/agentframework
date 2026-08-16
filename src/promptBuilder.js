@@ -1,4 +1,5 @@
-// promptBuilder.js — Prompt and message array builder (ESM, No classes)
+import fs from 'fs';
+import path from 'path';
 
 var DEFAULT_SYSTEM_PROMPT =
   'You are an expert AI software engineering agent.\n' +
@@ -6,12 +7,136 @@ var DEFAULT_SYSTEM_PROMPT =
   'Use tools effectively to inspect files, execute terminal commands, edit code, and manage plans.\n' +
   'Always maintain clean state and verify your work.';
 
+function getMimeType(filePath) {
+  var ext = path.extname(filePath || '').toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.svg') return 'image/svg+xml';
+  return 'image/png';
+}
+
+function processImageSource(imgSrc) {
+  if (!imgSrc || typeof imgSrc !== 'string') return null;
+  var trimmed = imgSrc.trim();
+
+  // Already a data URI or HTTP URL
+  if (trimmed.startsWith('data:') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
+  }
+
+  // Local file path
+  try {
+    if (fs.existsSync(trimmed)) {
+      var buffer = fs.readFileSync(trimmed);
+      var mime = getMimeType(trimmed);
+      return 'data:' + mime + ';base64,' + buffer.toString('base64');
+    }
+  } catch (_) {}
+
+  return trimmed;
+}
+
+function buildUserContent(userPrompt, options) {
+  options = options || {};
+  var rawImages = options.images || (userPrompt && typeof userPrompt === 'object' ? userPrompt.images : null);
+  var promptText = typeof userPrompt === 'string' ? userPrompt : ((userPrompt && userPrompt.text) ? userPrompt.text : '');
+
+  // Array prompt passed directly
+  if (Array.isArray(userPrompt)) {
+    var processedBlocks = [];
+    for (var b = 0; b < userPrompt.length; b++) {
+      var block = userPrompt[b];
+      if (typeof block === 'string') {
+        processedBlocks.push({ type: 'text', text: block });
+      } else if (block && block.type === 'image_url') {
+        var urlStr = block.image_url ? (block.image_url.url || block.image_url) : block.url;
+        processedBlocks.push({ type: 'image_url', image_url: { url: processImageSource(urlStr) } });
+      } else {
+        processedBlocks.push(block);
+      }
+    }
+    return processedBlocks;
+  }
+
+  // Text + Images array
+  if (rawImages && Array.isArray(rawImages) && rawImages.length > 0) {
+    var contentArray = [];
+    if (promptText) {
+      contentArray.push({ type: 'text', text: promptText });
+    }
+    for (var i = 0; i < rawImages.length; i++) {
+      var processed = processImageSource(rawImages[i]);
+      if (processed) {
+        contentArray.push({
+          type: 'image_url',
+          image_url: { url: processed }
+        });
+      }
+    }
+    return contentArray.length > 0 ? contentArray : promptText;
+  }
+
+  return promptText;
+}
+
+function pruneHistory(history, maxMessages) {
+  if (!maxMessages || typeof maxMessages !== 'number' || history.length <= maxMessages) {
+    return history;
+  }
+  var sliced = history.slice(history.length - maxMessages);
+  // Ensure we don't start midway through an orphaned tool result
+  while (sliced.length > 0 && (sliced[0].role === 'tool' || sliced[0].role === 'assistant')) {
+    sliced.shift();
+  }
+  return sliced;
+}
+
+function extractUserPromptFromTurn(turn) {
+  if (!turn || typeof turn !== 'object') return null;
+  if (typeof turn.user_prompt === 'string') return turn.user_prompt;
+  if (typeof turn.prompt === 'string') return turn.prompt;
+  var keys = Object.keys(turn);
+  for (var k = 0; k < keys.length; k++) {
+    var key = keys[k];
+    if (key.indexOf('user_prompt') === 0 && typeof turn[key] === 'string') {
+      return turn[key];
+    }
+  }
+  return null;
+}
+
+function formatProviderToolCalls(toolCalls) {
+  if (!Array.isArray(toolCalls)) return undefined;
+
+  var formattedCalls = [];
+  for (var i = 0; i < toolCalls.length; i++) {
+    var toolCall = toolCalls[i] || {};
+    var functionCall = toolCall.function || {};
+    var rawArguments = toolCall.args !== undefined ? toolCall.args : (toolCall.arguments !== undefined ? toolCall.arguments : functionCall.arguments);
+    var formattedArguments = typeof rawArguments === 'string' ? rawArguments : JSON.stringify(rawArguments || {});
+    formattedCalls.push({
+      id: toolCall.id || ('call_' + i),
+      type: 'function',
+      function: {
+        name: toolCall.name || functionCall.name || 'tool',
+        arguments: formattedArguments
+      }
+    });
+  }
+
+  return formattedCalls;
+}
+
 export function buildMessages(userPrompt, history, workspace, options) {
   options = options || {};
   var systemPrompt = options.instructions || options.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+  var maxHistoryMessages = options.maxHistoryMessages || options.maxHistory;
+  var formattedContent = userPrompt ? buildUserContent(userPrompt, options) : null;
+  var promptFoundInHistory = false;
   var messages = [];
 
-  // Add System Message
   var fullSystemText = systemPrompt;
   if (workspace) {
     fullSystemText += '\n\nWorkspace Root Directory: ' + workspace;
@@ -22,28 +147,85 @@ export function buildMessages(userPrompt, history, workspace, options) {
     content: fullSystemText
   });
 
-  // Add Conversation History
-  if (history && Array.isArray(history)) {
-    for (var i = 0; i < history.length; i++) {
-      var hMsg = history[i];
-      if (hMsg.role && hMsg.content !== undefined) {
-        messages.push({
+  var effectiveHistory = history;
+  if (Array.isArray(history) && maxHistoryMessages !== undefined && maxHistoryMessages !== null) {
+    effectiveHistory = pruneHistory(history, maxHistoryMessages);
+  }
+
+  if (effectiveHistory && Array.isArray(effectiveHistory)) {
+    for (var i = 0; i < effectiveHistory.length; i++) {
+      var hMsg = effectiveHistory[i];
+      if (!hMsg) continue;
+
+      var turnPrompt = extractUserPromptFromTurn(hMsg);
+      if (turnPrompt !== null || hMsg.response) {
+        if (turnPrompt !== null) {
+          messages.push({
+            role: 'user',
+            content: turnPrompt
+          });
+        }
+
+        if (hMsg.response && typeof hMsg.response === 'object') {
+          var resp = hMsg.response;
+          var assistantObj = {
+            role: 'assistant',
+            content: resp.content || ''
+          };
+          if (resp.reasoning_content) assistantObj.reasoning_content = resp.reasoning_content;
+          else if (resp.thinking) assistantObj.thinking = resp.thinking;
+          else if (resp.reasoning) assistantObj.reasoning = resp.reasoning;
+
+          var toolCalls = resp.tool_calls || resp.toolCalls;
+          if (toolCalls && Array.isArray(toolCalls) && toolCalls.length > 0) {
+            assistantObj.tool_calls = formatProviderToolCalls(toolCalls);
+            messages.push(assistantObj);
+
+            for (var trIdx = 0; trIdx < toolCalls.length; trIdx++) {
+              var trItem = toolCalls[trIdx];
+              var trCallId = trItem.id || ('call_' + i + '_' + trIdx);
+              var trName = trItem.name || (trItem.function ? trItem.function.name : 'tool');
+              var trOutput = trItem.output !== undefined ? trItem.output : (trItem.result !== undefined ? trItem.result : 'Permission denied by user');
+              var serializedOutput = typeof trOutput === 'string' ? trOutput : JSON.stringify(trOutput);
+              messages.push({
+                role: 'tool',
+                tool_call_id: trCallId,
+                name: trName,
+                content: serializedOutput === undefined ? '' : serializedOutput
+              });
+            }
+          } else {
+            messages.push(assistantObj);
+          }
+        }
+      } else if (hMsg.role && hMsg.content !== undefined) {
+        var historyContent = hMsg.content;
+        if (options.promptAlreadyInHistory && hMsg.role === 'user' && JSON.stringify(hMsg.content) === JSON.stringify(userPrompt)) {
+          historyContent = formattedContent;
+          promptFoundInHistory = true;
+        }
+        var msgObj = {
           role: hMsg.role,
-          content: hMsg.content,
+          content: historyContent,
           tool_call_id: hMsg.tool_call_id || undefined,
+          tool_calls: formatProviderToolCalls(hMsg.tool_calls),
           name: hMsg.name || undefined
-        });
+        };
+        if (hMsg.role === 'assistant') {
+          if (hMsg.reasoning_content) msgObj.reasoning_content = hMsg.reasoning_content;
+          else if (hMsg.thinking) msgObj.thinking = hMsg.thinking;
+          else if (hMsg.reasoning) msgObj.reasoning = hMsg.reasoning;
+        }
+        messages.push(msgObj);
       }
     }
   }
 
-  // Add Current User Prompt (if not already last in history)
   if (userPrompt) {
-    var lastMsg = messages[messages.length - 1];
-    if (!lastMsg || lastMsg.role !== 'user' || lastMsg.content !== userPrompt) {
+    if (!promptFoundInHistory) {
       messages.push({
         role: 'user',
-        content: userPrompt
+        content: formattedContent
       });
     }
   }

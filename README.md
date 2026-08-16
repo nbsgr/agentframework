@@ -10,7 +10,7 @@
 ## ✨ Features
 
 - ⚡ **Lightweight & Pure JavaScript**: ES Modules (ESM) written in clean, robust JavaScript. Zero TypeScript compilation needed.
-- 🌐 **Multi-Provider Support**: Connect seamlessly to **Ollama (local LLMs), OpenCode Zen (DeepSeek V4), Groq, OpenRouter, Google Gemini, OpenAI, or Anthropic Claude**.
+- 🌐 **Two Provider Contracts**: Use `openai-compatible` for Ollama, OpenCode Zen, Groq, OpenRouter, Gemini OpenAI-compatible endpoints, OpenAI, and custom endpoints; use `anthropic` for Anthropic's native API.
 - 💬 **Real-Time Streaming**: Stream reasoning/thinking tokens (`evt.type === 'thinking'`), response text (`evt.type === 'stream'`), and tool execution events in real time.
 - 🛡️ **Human-in-the-Loop (HITL) Safety**: Built-in permission control layer (`needsApproval` + `permissionHandler`). Pause execution for user approval (CLI prompt, HTML Modal, or React UI) before running sensitive operations.
 - 📦 **Universal Tool Support**: Seamlessly accepts custom tools via `tool({...})`, Zod schemas, JSON schemas, tools from `coderun-tools`, MCP tools, or subagent instances.
@@ -22,6 +22,12 @@
 
 ```bash
 npm install coderun-agent
+
+# Optional filesystem and terminal tools
+npm install coderun-tools
+
+# Optional MCP client support
+npm install @modelcontextprotocol/client
 ```
 
 ---
@@ -33,7 +39,7 @@ Build and run your first AI agent in 5 lines of code:
 ```javascript
 import { createAgent } from 'coderun-agent';
 
-const agent = createAgent({
+var agent = createAgent({
   name: 'Assistant',
   instructions: 'You are a helpful software engineering assistant.',
   provider: 'openai-compatible',
@@ -42,7 +48,7 @@ const agent = createAgent({
   model: 'qwen2.5-coder:7b'
 });
 
-const result = await agent.run('Write a JavaScript function to reverse a string.');
+var result = await agent.run('Write a JavaScript function to reverse a string.');
 
 console.log(result.content);
 ```
@@ -53,12 +59,46 @@ console.log(result.content);
 
 Create custom tools using standard JSON schemas or **Zod schemas**:
 
+Tool arguments are checked against the declared schema before execution. Invalid
+arguments are returned to the model as a failed tool result and are never passed
+to your tool handler.
+
+## 🔌 Plug-and-Play MCP Servers
+
+Connect existing MCP servers, including filesystem, GitHub, and other stdio or
+Streamable HTTP servers, without changing the agent loop:
+
+```javascript
+var agent = createAgent({
+  provider: 'openai-compatible',
+  baseurl: 'http://localhost:11434/v1',
+  apikey: 'ollama',
+  model: 'minimax-m3:cloud'
+});
+
+await agent.connectMcp({
+  name: 'filesystem',
+  transport: 'stdio',
+  command: 'npx',
+  args: [ '-y', '@modelcontextprotocol/server-filesystem', process.cwd() ]
+});
+
+var result = await agent.run('List the files in the project directory.');
+await agent.closeMcp();
+```
+
+For a remote MCP server, use `transport: 'streamable-http'`, a `url`, and
+optional `headers`. MCP tools are discovered automatically, converted to the
+agent tool format, validated, permission-checked, and executed through the
+existing tool loop. The MCP client package is optional and is loaded only when
+`connectMcp()` is called.
+
 ```javascript
 import { createAgent, tool } from 'coderun-agent';
 import { z } from 'zod';
 
 // 1. Weather Tool with Zod Schema
-const getWeather = tool({
+var getWeather = tool({
   name: 'get_weather',
   description: 'Get current weather for a city',
   parameters: z.object({
@@ -70,7 +110,7 @@ const getWeather = tool({
 });
 
 // 2. Currency Tool with JSON Schema
-const convertCurrency = tool({
+var convertCurrency = tool({
   name: 'convert_currency',
   description: 'Convert currency amount',
   parameters: {
@@ -88,7 +128,7 @@ const convertCurrency = tool({
 });
 
 // 3. Initialize Agent with tools:
-const agent = createAgent({
+var agent = createAgent({
   name: 'Multi-Tool Agent',
   provider: 'openai-compatible',
   baseurl: 'https://opencode.ai/zen/v1',
@@ -97,7 +137,7 @@ const agent = createAgent({
   tools: [ getWeather, convertCurrency ]
 });
 
-const result = await agent.run('What is the weather in Tokyo and convert 100 USD to EUR?');
+var result = await agent.run('What is the weather in Tokyo and convert 100 USD to EUR?');
 
 console.log(result.content);
 console.log('Executed Tools:', result.toolCalls);
@@ -107,13 +147,13 @@ console.log('Executed Tools:', result.toolCalls);
 
 ## 🔌 Using Built-in Tools from `coderun-tools`
 
-`coderun-agent` works out-of-the-box with tools imported directly from `coderun-tools`:
+After installing the optional `coderun-tools` package, its tools can be passed directly to `coderun-agent`:
 
 ```javascript
 import { createAgent } from 'coderun-agent';
 import { readFile, writeFile, executeCommand, listDirectory } from 'coderun-tools';
 
-const agent = createAgent({
+var agent = createAgent({
   name: 'Developer Agent',
   instructions: 'You inspect and modify project files.',
   provider: 'openai-compatible',
@@ -127,7 +167,7 @@ const agent = createAgent({
   workspace: process.cwd()
 });
 
-const result = await agent.run('List directory contents and read package.json');
+var result = await agent.run('List directory contents and read package.json');
 ```
 
 ---
@@ -156,7 +196,7 @@ function handleAgentEvent(evt) {
   }
 }
 
-const agent = createAgent({
+var agent = createAgent({
   name: 'Streaming Agent',
   provider: 'openai-compatible',
   baseurl: 'https://opencode.ai/zen/v1',
@@ -166,7 +206,7 @@ const agent = createAgent({
   stream: true
 });
 
-const result = await agent.run('What is the weather in Tokyo?', {
+var result = await agent.run('What is the weather in Tokyo?', {
   onEvent: handleAgentEvent
 });
 ```
@@ -199,7 +239,7 @@ function cliPermissionHandler(toolName, args, toolId) {
   });
 }
 
-const agent = createAgent({
+var agent = createAgent({
   name: 'Secure CLI Agent',
   provider: 'openai-compatible',
   baseurl: 'http://localhost:11434/v1',
@@ -221,8 +261,8 @@ function webUiPermissionHandler(toolName, args, toolId) {
     openReactModalDialog({
       toolName: toolName,
       args: args,
-      onAllow: () => resolve(true), // 🟢 Unfreezes agent loop with TRUE!
-      onDeny: () => resolve(false)   // 🔴 Unfreezes agent loop with FALSE!
+      onAllow: function onAllow() { resolve(true); }, // 🟢 Unfreezes agent loop with TRUE!
+      onDeny: function onDeny() { resolve(false); }   // 🔴 Unfreezes agent loop with FALSE!
     });
   });
 }
@@ -236,7 +276,7 @@ Pass any subagent instance directly into `tools: [ subAgent ]` to enable multi-a
 
 ```javascript
 // 1. Create a specialized Research Agent
-const researcher = createAgent({
+var researcher = createAgent({
   name: 'Researcher',
   instructions: 'You research topics and summarize key findings.',
   provider: 'openai-compatible',
@@ -246,7 +286,7 @@ const researcher = createAgent({
 });
 
 // 2. Pass researcher directly as a tool to Manager Agent!
-const manager = createAgent({
+var manager = createAgent({
   name: 'Manager',
   instructions: 'Delegate research tasks to the Researcher agent.',
   provider: 'openai-compatible',
@@ -257,7 +297,7 @@ const manager = createAgent({
   tools: [ researcher ] // 👈 Available as transfer_to_researcher tool!
 });
 
-const result = await manager.run('Research quantum computing breakthroughs.');
+var result = await manager.run('Research quantum computing breakthroughs.');
 ```
 
 ---
@@ -299,6 +339,42 @@ createAgent({
 
 ---
 
+## 🖼️ Multimodal Vision & Image Input
+
+Pass local image file paths, HTTP URLs, or Base64 data URIs directly into `agent.run()`:
+
+```javascript
+// Local image files are automatically converted to Base64 Data URIs:
+var result = await agent.run('Describe this diagram', {
+  images: ['./screenshots/chart.png']
+});
+```
+
+---
+
+## 📜 Conversation History & Session Management
+
+`coderun-agent` is **stateless across separate `.run()` calls**. It never automatically reuses a previous run. The caller owns continuation history and must pass it explicitly. The agent does not expose implicit history-management methods; this prevents accidental context leakage between tasks.
+
+To pass multi-turn conversation history into a run, supply `history` in options:
+
+```javascript
+var userSessionHistory = [
+  { role: 'user', content: 'My favorite programming language is JavaScript.' },
+  { role: 'assistant', content: 'Got it!' }
+];
+
+var result = await agent.run('What is my favorite programming language?', {
+  history: userSessionHistory
+});
+```
+
+The returned `result.history` is the transcript for that run. Pass it back explicitly when a later run should continue the same task.
+
+Use `timeoutMs` or an `AbortSignal` in `runOptions` to cancel a long-running provider request or cooperative tool operation. Timeout failures return `status: 'timeout'`; caller cancellation returns `status: 'aborted'`.
+
+---
+
 ## 📊 Result Object Reference
 
 Every `await agent.run()` resolves to a structured result object:
@@ -321,9 +397,11 @@ Every `await agent.run()` resolves to a structured result object:
     completion_tokens: 45,
     total_tokens: 185
   },
-  history: [...]         // Updated conversation message history array
+  history: [...]         // Complete transcript produced during this run only
 }
 ```
+
+If the loop stops because `maxIterations` is reached, the result has `success: false` and `status: 'max_iterations_reached'`.
 
 ---
 

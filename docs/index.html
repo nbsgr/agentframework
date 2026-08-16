@@ -231,7 +231,7 @@
   <!-- Top Header Navigation Bar -->
   <header class="top-nav">
     <div class="brand">
-      🤖 CodeRun Agents SDK <span class="badge">v1.0.1</span>
+      🤖 CodeRun Agents SDK <span class="badge">v1.0.3</span>
     </div>
     <div class="search-box">
       🔍 Search documentation... <span style="margin-left:auto; font-size:10px; background:var(--bg-sidebar); padding:2px 6px; border-radius:4px;">Ctrl K</span>
@@ -249,6 +249,7 @@
       <a href="#agents" class="nav-link">Agents & createAgent</a>
       <a href="#tools" class="nav-link">Tools & Schemas</a>
       <a href="#coderun-tools" class="nav-link">coderun-tools Integration</a>
+      <a href="#mcp" class="nav-link">MCP Servers</a>
       <a href="#human-in-the-loop" class="nav-link">Human-in-the-Loop (HIL)</a>
       <a href="#streaming" class="nav-link">Streaming & Reasoning</a>
       <a href="#subagents" class="nav-link">Agents as Tools</a>
@@ -298,17 +299,51 @@ agent.run('Write a function to reverse a string.').then(function(result) {
       <!-- Agents & createAgent Section -->
       <section id="agents">
         <h2>Agents & <code>createAgent</code></h2>
-        <p>An agent is configured using a single configuration object passed to <code>createAgent(config)</code>. An agent instance exposes methods to execute prompts, inspect message history, track token usage, and manage lifecycle state.</p>
+        <p>An agent is configured using a single configuration object passed to <code>createAgent(config)</code>. An agent instance exposes methods to execute prompts, track token usage, manage lifecycle state, and connect optional MCP servers.</p>
 
         <h3>Agent Methods Reference</h3>
         <ul>
           <li><code>agent.run(prompt, runOptions)</code>: Executes a prompt turn loop. Returns a Promise resolving to a structured <code>result</code> object.</li>
-          <li><code>agent.getHistory()</code>: Returns the active conversation message history array.</li>
-          <li><code>agent.setHistory(newHistory)</code>: Overwrites the internal message history array.</li>
-          <li><code>agent.clearHistory()</code>: Clears conversation history for a fresh turn.</li>
+          <li><code>agent.run(prompt, { history })</code>: Passes caller-owned continuation history for one run.</li>
+          <li>The agent does not retain history between runs, preventing accidental context leakage.</li>
+          <li><code>result.history</code>: Returns the complete transcript produced during that run.</li>
           <li><code>agent.getUsage()</code>: Returns cumulative token usage metrics (<code>prompt_tokens</code>, <code>completion_tokens</code>, <code>total_tokens</code>).</li>
-          <li><code>agent.resetContext()</code>: Resets history, usage, and reactive state.</li>
+          <li><code>agent.resetContext()</code>: Resets usage and the agent's local lifecycle state.</li>
+          <li><code>agent.connectMcp(config)</code>: Connects to an MCP server and discovers its tools.</li>
+          <li><code>agent.closeMcp()</code>: Closes connected MCP sessions and local MCP server processes.</li>
         </ul>
+      </section>
+
+      <!-- MCP Integration Section -->
+      <section id="mcp">
+        <h2>Plug-and-Play MCP Servers</h2>
+        <p>Install the optional MCP client package when you want to use existing MCP servers:</p>
+        <pre><code>npm install @modelcontextprotocol/client</code></pre>
+        <p>Connect open-source filesystem, GitHub, or other MCP servers through stdio:</p>
+        <pre><code>var agent = createAgent({
+  provider: 'openai-compatible',
+  baseurl: 'http://localhost:11434/v1',
+  apikey: 'ollama',
+  model: 'minimax-m3:cloud'
+});
+
+await agent.connectMcp({
+  name: 'filesystem',
+  transport: 'stdio',
+  command: 'npx',
+  args: [ '-y', '@modelcontextprotocol/server-filesystem', process.cwd() ]
+});
+
+var result = await agent.run('List the project files with the MCP filesystem tool.');
+await agent.closeMcp();</code></pre>
+        <p>For a remote server, use <code>transport: 'streamable-http'</code>, provide its <code>url</code>, and add authentication headers when required:</p>
+        <pre><code>await agent.connectMcp({
+  name: 'remote-github',
+  transport: 'streamable-http',
+  url: 'https://example.com/mcp',
+  headers: { Authorization: 'Bearer YOUR_TOKEN' }
+});</code></pre>
+        <p>MCP tools are discovered automatically, converted to the agent's tool format, validated, permission-checked, executed through the normal agent loop, and returned to the model. The MCP client is loaded lazily only when <code>connectMcp()</code> is called.</p>
       </section>
 
       <!-- Tools & Schemas Section -->
@@ -340,7 +375,7 @@ var getWeatherTool = tool({
       <!-- coderun-tools Integration Section -->
       <section id="coderun-tools">
         <h2>Built-in Tools (<code>coderun-tools</code>)</h2>
-        <p><code>coderun-agent</code> seamlessly accepts tools imported directly from <code>coderun-tools</code> (filesystem, terminal, search, datetime):</p>
+        <p>Install the optional package with <code>npm install coderun-tools</code>, then pass its filesystem, terminal, search, or datetime tools to <code>coderun-agent</code>:</p>
         <pre><code>import { createAgent } from 'coderun-agent';
 import { readFile, writeFile, executeCommand, listDirectory } from 'coderun-tools';
 
@@ -431,7 +466,7 @@ var agent = createAgent({
 
 var agent = createAgent({
   name: 'StreamAgent',
-  provider: 'compatible',
+  provider: 'openai-compatible',
   baseurl: 'https://opencode.ai/zen/v1',
   apikey: 'YOUR_API_KEY',
   model: 'deepseek-v4-flash-free',
@@ -533,8 +568,8 @@ var manager = createAgent({
             </tr>
             <tr>
               <td><code>baseurl</code></td>
-              <td>Yes</td>
-              <td>HTTP endpoint URL.</td>
+              <td>OpenAI-compatible only</td>
+              <td>HTTP endpoint URL. Anthropic uses its native SDK endpoint by default.</td>
             </tr>
             <tr>
               <td><code>apikey</code></td>
@@ -571,6 +606,16 @@ var manager = createAgent({
               <td>No</td>
               <td>Workspace directory path (defaults to <code>process.cwd()</code>).</td>
             </tr>
+            <tr>
+              <td><code>timeoutMs</code></td>
+              <td>No</td>
+          <td>Abort the provider request and cooperative tool work after the specified number of milliseconds. Timeout results use <code>status: 'timeout'</code>.</td>
+            </tr>
+            <tr>
+              <td><code>signal</code></td>
+              <td>No</td>
+          <td>Caller-provided <code>AbortSignal</code> for cancelling provider and cooperative tool work. Aborted results use <code>status: 'aborted'</code>.</td>
+            </tr>
           </tbody>
         </table>
       </section>
@@ -590,7 +635,7 @@ var manager = createAgent({
             <tr>
               <td><code>success</code></td>
               <td>Boolean</td>
-              <td>Indicates clean completion of the agent turn loop.</td>
+              <td>Indicates clean completion of the agent turn loop. Iteration-limit termination returns <code>false</code>.</td>
             </tr>
             <tr>
               <td><code>content</code></td>
@@ -615,7 +660,7 @@ var manager = createAgent({
             <tr>
               <td><code>history</code></td>
               <td>Array</td>
-              <td>Updated message history array.</td>
+              <td>Complete transcript produced during the current run. It is not automatically reused by a later run.</td>
             </tr>
           </tbody>
         </table>
@@ -631,6 +676,7 @@ var manager = createAgent({
       <a href="#agents" class="toc-link">Agents & createAgent</a>
       <a href="#tools" class="toc-link">Tools & Schemas</a>
       <a href="#coderun-tools" class="toc-link">coderun-tools Integration</a>
+      <a href="#mcp" class="toc-link">MCP Servers</a>
       <a href="#human-in-the-loop" class="toc-link">Human-in-the-Loop (HIL)</a>
       <a href="#streaming" class="toc-link">Streaming & Reasoning</a>
       <a href="#subagents" class="toc-link">Agents as Tools</a>

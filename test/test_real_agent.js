@@ -17,14 +17,14 @@ async function testRealAgent() {
     executeTool: coderunTools.executeTool
   });
 
-  agent.onStateChange(function(evt) {
+  agent.onStateChange(function handleStateChange(evt) {
     console.log('🔄 [STATE TRANSITION]', evt.fromState, '➜', evt.toState);
   });
 
   var result = await agent.run('Read package.json and summarize what dependencies are installed.', {
     workspace: process.cwd(),
     history: [],
-    onEvent: function(evt) {
+    onEvent: function handleEvent(evt) {
       if (evt.type === 'stream') {
         process.stdout.write(evt.chunk);
       } else if (evt.type === 'tool_call') {
@@ -33,7 +33,7 @@ async function testRealAgent() {
         console.log('✅ [TOOL RESULT]', evt.tool, '-> Success:', evt.result.output.success);
       }
     },
-    askPermission: function(toolName, args) {
+    askPermission: function handlePermission(toolName, args) {
       console.log('❓ [PERMISSION CHECK] Approving:', toolName);
       return Promise.resolve(true);
     }

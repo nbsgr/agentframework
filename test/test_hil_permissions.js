@@ -52,7 +52,7 @@ async function testHILPermissions() {
   var permissionApprovedCalled = false;
   var res2 = await allowedAgent.run('Read package.json', {
     workspace: process.cwd(),
-    askPermission: async function(toolName, args) {
+    askPermission: async function handlePermissionApproved(toolName, args) {
       permissionApprovedCalled = true;
       console.log('  ❓ HIL Permission ALLOW Granted for:', toolName);
       return true; // Approve
@@ -78,7 +78,7 @@ async function testHILPermissions() {
   var permissionDeniedCalled = false;
   var res3 = await deniedAgent.run('Read package.json', {
     workspace: process.cwd(),
-    askPermission: async function(toolName, args) {
+    askPermission: async function handlePermissionDenied(toolName, args) {
       permissionDeniedCalled = true;
       console.log('  🚫 HIL Permission DENIED for:', toolName);
       return false; // Deny permission

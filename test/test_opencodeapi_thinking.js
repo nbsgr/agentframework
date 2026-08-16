@@ -15,7 +15,7 @@ async function testOpenCodeApiThinking() {
   });
 
   var result = await agent.run('How many r\'s are in the word strawberry?', {
-    onEvent: function(evt) {
+    onEvent: function handleEvent(evt) {
       if (evt.type === 'thinking') {
         process.stdout.write('💭 [THINKING]: ' + evt.chunk);
       } else if (evt.type === 'stream') {

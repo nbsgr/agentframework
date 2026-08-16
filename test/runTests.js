@@ -19,27 +19,18 @@ async function runTests() {
     }
   }
 
-  // Test 1: createProvider for OpenAI / Compatible
-  console.log('--- Test 1: createProvider (OpenAI / Compatible) ---');
-  var providerOai = createProvider({ provider: 'openai' });
-  assert(typeof providerOai.chat === 'function', 'OpenAI provider has chat function');
+  // Test 1: createProvider for OpenAI Compatible
+  console.log('--- Test 1: createProvider (OpenAI-Compatible) ---');
+  var providerOai = createProvider({ provider: 'openai-compatible' });
+  assert(typeof providerOai.chat === 'function', 'OpenAI-Compatible provider has chat function');
 
-  // Test 2: createProvider for Anthropic, Ollama, Gemini, Groq, OpenRouter
-  console.log('\n--- Test 2: createProvider (Anthropic, Ollama, Gemini, Groq, OpenRouter) ---');
+  // Test 2: createProvider for Anthropic
+  console.log('\n--- Test 2: createProvider (Anthropic & OpenAI-Compatible) ---');
   var providerAnt = createProvider({ provider: 'anthropic' });
   assert(typeof providerAnt.chat === 'function', 'Anthropic provider has chat function');
 
-  var providerOll = createProvider({ provider: 'ollama' });
-  assert(typeof providerOll.chat === 'function', 'Ollama provider has chat function');
-
-  var providerGem = createProvider({ provider: 'gemini' });
-  assert(typeof providerGem.chat === 'function', 'Gemini provider has chat function');
-
-  var providerGro = createProvider({ provider: 'groq' });
-  assert(typeof providerGro.chat === 'function', 'Groq provider has chat function');
-
-  var providerOpr = createProvider({ provider: 'openrouter' });
-  assert(typeof providerOpr.chat === 'function', 'OpenRouter provider has chat function');
+  var providerOll = createProvider({ provider: 'openai-compatible' });
+  assert(typeof providerOll.chat === 'function', 'OpenAI-Compatible provider has chat function');
 
   // Test 3: Agent State Machine
   console.log('\n--- Test 3: agentState transitions ---');
@@ -47,20 +38,23 @@ async function runTests() {
   assert(getState() === 'idle', 'Initial state is idle');
 
   var stateChanges = [];
-  onStateChange(function(evt) {
+  onStateChange(function handleStateChange(evt) {
     stateChanges.push(evt.toState);
   });
 
   // Test 4: createAgent factory
   console.log('\n--- Test 4: createAgent Factory ---');
   var agent = createAgent({
-    provider: 'ollama',
+    provider: 'openai-compatible',
     model: 'qwen2.5-coder:7b',
-    baseUrl: 'http://localhost:11434'
+    baseurl: 'http://localhost:11434/v1',
+    apikey: 'ollama'
   });
 
   assert(typeof agent.run === 'function', 'createAgent returns agent object with run() function');
   assert(typeof agent.getState === 'function', 'agent object has getState()');
+  assert(typeof agent.connectMcp === 'function', 'agent object has connectMcp()');
+  assert(typeof agent.closeMcp === 'function', 'agent object has closeMcp()');
   assert(agent.getConfig().model === 'qwen2.5-coder:7b', 'agent object stores defaultConfig');
 
   console.log('\n====================================================');

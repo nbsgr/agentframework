@@ -1,15 +1,46 @@
 {
   "name": "coderun-agent",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Standalone, multi-provider AI Agent framework in plain JavaScript",
   "main": "index.js",
   "type": "module",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "test": "node test/runTests.js"
+    "test": "node test/runDeterministicTests.js",
+    "test:smoke": "node test/runTests.js",
+    "test:live": "node test/test_live_supported_providers.js",
+    "test:mcp": "node test/test_mcp_filesystem.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.0",
     "openai": "^4.85.4"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/client": ">=1.0.0",
+    "@modelcontextprotocol/sdk": ">=1.0.0",
+    "coderun-tools": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "coderun-tools": {
+      "optional": true
+    },
+    "@modelcontextprotocol/client": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
+  }
 }

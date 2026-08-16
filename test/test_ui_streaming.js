@@ -18,14 +18,14 @@ async function testUIStreaming() {
   });
 
   // Global State Listener for UI Status Badge
-  agent.onStateChange(function(evt) {
+  agent.onStateChange(function handleStateChange(evt) {
     console.log('🏷️ [UI BADGE STATE]', evt.fromState.toUpperCase(), '➔', evt.toState.toUpperCase());
   });
 
   // Run turn with real-time UI Event Listener
   var result = await agent.run('Read package.json and summarize it', {
     workspace: process.cwd(),
-    onEvent: function(event) {
+    onEvent: function handleEvent(event) {
       switch (event.type) {
         case 'thinking':
           // Display in collapsible Thinking Process Card in UI

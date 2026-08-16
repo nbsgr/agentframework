@@ -4,14 +4,8 @@ import Anthropic from "@anthropic-ai/sdk";
 export function createClient(provider, baseurl, apikey) {
     var p, b, a;
 
-    // Object argument
     if (provider && typeof provider === "object") {
-
-        if (
-            !provider.provider ||
-            !provider.baseurl ||
-            !provider.apikey
-        ) {
+        if (!provider.provider || !(provider.apikey || provider.apiKey || provider.api_key)) {
             throw new Error(`
 Object must be passed in this format:
 
@@ -24,47 +18,42 @@ Object must be passed in this format:
         }
 
         p = provider.provider;
-        b = provider.baseurl;
-        a = provider.apikey;
-    }
-
-    // Direct arguments
-    else {
+        b = provider.baseurl || provider.baseUrl || provider.baseURL;
+        a = provider.apikey || provider.apiKey || provider.api_key;
+    } else {
         p = provider;
         b = baseurl;
         a = apikey;
     }
 
-    // Provider validation
     if (!p || typeof p !== "string" || !p.trim()) {
         throw new Error(
             "Provider name is required and must be a non-empty string."
         );
     }
 
-    // Base URL validation
-    if (!b || typeof b !== "string" || !b.trim()) {
+    if ((!b || typeof b !== "string" || !b.trim()) && String(p).trim().toLowerCase() !== "anthropic") {
         throw new Error(
             "Base URL is required and must be a non-empty string."
         );
     }
 
-    // API key validation
     if (!a || typeof a !== "string" || !a.trim()) {
         throw new Error(
             "API key is required and must be a non-empty string."
         );
     }
 
-    p = p.trim();
-    b = b.trim();
+    p = p.trim().toLowerCase() === "anthropic" ? "anthropic" : "openai-compatible";
+    b = b ? b.trim() : "https://api.anthropic.com";
     a = a.trim();
 
     var client;
 
-    if (p.toLowerCase() === "anthropic") {
+    if (p === "anthropic") {
         client = new Anthropic({
-            apiKey: a
+            apiKey: a,
+            baseURL: b
         });
     } else {
         client = new OpenAI({

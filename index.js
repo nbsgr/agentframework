@@ -1,9 +1,10 @@
 // index.js — Main library entry point for coderun-agent (ESM, No classes)
 import { runAgentLoop } from './src/agentLoop.js';
 import { createProvider } from './src/providers/providerManager.js';
-import { getState, onStateChange, resetState } from './src/agentState.js';
+import { createState, getState, onStateChange, resetState } from './src/agentState.js';
 import { createClient } from './src/client.js';
-import { tool, validateTools, agentToTool } from './src/tools.js';
+import { tool, validateTools, validateToolArguments, agentToTool } from './src/tools.js';
+import { connectMcpServer } from './src/mcp.js';
 
 export function createAgent(config) {
   if (!config || typeof config !== 'object') {
@@ -19,8 +20,8 @@ export function createAgent(config) {
   var model = (config.model && typeof config.model === 'string' && config.model.trim()) ? config.model.trim() : 'qwen2.5-coder:7b';
   var stream = config.stream !== undefined ? Boolean(config.stream) : true;
   var workspace = typeof config.workspace === 'string' ? config.workspace : process.cwd();
+  var defaultMaxIterations = typeof config.maxIterations === 'number' ? config.maxIterations : 50;
 
-  // 3. Validate permissionHandler requirement if needsApproval is configured
   var globalApproval = config.needsApproval;
   var globalPermissionHandler = config.permissionHandler || config.askPermission;
 
@@ -30,14 +31,43 @@ export function createAgent(config) {
     }
   }
 
-  // 4. Validate tools parameter
   var rawTools = config.tools;
   var validatedTools = validateTools(rawTools, globalApproval);
 
-  var internalHistory = Array.isArray(config.history) ? config.history.slice() : [];
+  function hasApprovalRequiredTools(toolValidation) {
+    for (var i = 0; i < toolValidation.definitions.length; i++) {
+      if (toolValidation.definitions[i].needsApproval === true) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (hasApprovalRequiredTools(validatedTools) && typeof globalPermissionHandler !== 'function') {
+    throw new Error('permissionHandler function is required when any tool requires approval.');
+  }
+
   var internalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  var state = createState();
+  var runQueue = Promise.resolve();
+  var mcpConnections = [];
+  var mcpTools = [];
 
   function run(prompt, runOptions) {
+    var queuedRun = runQueue.then(executeQueuedRun);
+    runQueue = queuedRun.catch(ignoreRunFailure);
+    return queuedRun;
+
+    function executeQueuedRun() {
+      return runInternal(prompt, runOptions);
+    }
+
+    function ignoreRunFailure() {
+      return undefined;
+    }
+  }
+
+  function runInternal(prompt, runOptions) {
     runOptions = runOptions || {};
 
     var activeClient = runOptions.client ? createClient(runOptions.client) : clientObj;
@@ -48,11 +78,20 @@ export function createAgent(config) {
       provider: activeClient.provider,
       baseUrl: activeClient.baseurl || activeClient.baseUrl,
       apiKey: activeClient.apikey || activeClient.apiKey,
-      model: mergedModel
+      model: mergedModel,
+      maxIterations: typeof runOptions.maxIterations === 'number' ? runOptions.maxIterations : (typeof config.maxIterations === 'number' ? config.maxIterations : defaultMaxIterations),
+      parallelTools: runOptions.parallelTools !== undefined ? runOptions.parallelTools : config.parallelTools,
+      maxRetries: runOptions.maxRetries !== undefined ? runOptions.maxRetries : config.maxRetries,
+      maxHistoryMessages: runOptions.maxHistoryMessages !== undefined ? runOptions.maxHistoryMessages : (runOptions.maxHistory !== undefined ? runOptions.maxHistory : (config.maxHistoryMessages !== undefined ? config.maxHistoryMessages : config.maxHistory)),
+      toolChoice: runOptions.toolChoice !== undefined ? runOptions.toolChoice : (runOptions.tool_choice !== undefined ? runOptions.tool_choice : (config.toolChoice !== undefined ? config.toolChoice : config.tool_choice)),
+      responseFormat: runOptions.responseFormat !== undefined ? runOptions.responseFormat : (runOptions.response_format !== undefined ? runOptions.response_format : (config.responseFormat !== undefined ? config.responseFormat : config.response_format)),
+      timeoutMs: runOptions.timeoutMs !== undefined ? runOptions.timeoutMs : config.timeoutMs,
+      signal: runOptions.signal || config.signal
     };
 
-    var currentHistory = runOptions.history || internalHistory;
-    var runToolsInput = runOptions.tools || rawTools;
+    var currentHistory = Array.isArray(runOptions.history) ? runOptions.history.slice() : [];
+    var selectedTools = runOptions.tools !== undefined ? runOptions.tools : rawTools;
+    var runToolsInput = appendTools(selectedTools, mcpTools);
     var runApproval = runOptions.needsApproval !== undefined ? runOptions.needsApproval : globalApproval;
     var runPermissionHandler = runOptions.permissionHandler || runOptions.askPermission || globalPermissionHandler;
 
@@ -62,43 +101,45 @@ export function createAgent(config) {
 
     var runValidatedTools = validateTools(runToolsInput, runApproval);
 
+    if (hasApprovalRequiredTools(runValidatedTools) && typeof runPermissionHandler !== 'function') {
+      throw new Error('permissionHandler function is required when any tool requires approval.');
+    }
+
     var mergedRunOptions = {
       workspace: runOptions.workspace || workspace,
       history: currentHistory,
       instructions: runOptions.instructions || instructions,
       stream: runOptions.stream !== undefined ? Boolean(runOptions.stream) : stream,
       streamOptions: runOptions.streamOptions || { include_usage: true },
+      maxIterations: mergedConfig.maxIterations,
+      parallelTools: mergedConfig.parallelTools,
+      maxRetries: mergedConfig.maxRetries,
+      maxHistoryMessages: mergedConfig.maxHistoryMessages,
+      toolChoice: mergedConfig.toolChoice,
+      responseFormat: mergedConfig.responseFormat,
+      timeoutMs: mergedConfig.timeoutMs,
+      signal: mergedConfig.signal,
+      state: state,
+      images: runOptions.images || (prompt && typeof prompt === 'object' ? prompt.images : null),
       tools: runValidatedTools.definitions,
       toolsMap: runValidatedTools.toolsMap,
+      validateToolArguments: validateToolArguments,
       executeTool: runValidatedTools.executeTool || runOptions.executeTool || config.executeTool,
       onEvent: runOptions.onEvent || config.onEvent,
       permissionHandler: runPermissionHandler,
       askPermission: runPermissionHandler
     };
 
-    return runAgentLoop(prompt, mergedConfig, mergedRunOptions).then(function(result) {
-      if (result && result.history) {
-        internalHistory = result.history;
-      }
+    return runAgentLoop(prompt, mergedConfig, mergedRunOptions).then(handleRunResult);
+
+    function handleRunResult(result) {
       if (result && result.usage) {
         internalUsage.prompt_tokens += (result.usage.prompt_tokens || 0);
         internalUsage.completion_tokens += (result.usage.completion_tokens || 0);
         internalUsage.total_tokens += (result.usage.total_tokens || 0);
       }
       return result;
-    });
-  }
-
-  function getHistory() {
-    return internalHistory;
-  }
-
-  function setHistory(newHistory) {
-    internalHistory = Array.isArray(newHistory) ? newHistory.slice() : [];
-  }
-
-  function clearHistory() {
-    internalHistory = [];
+    }
   }
 
   function getUsage() {
@@ -106,25 +147,69 @@ export function createAgent(config) {
   }
 
   function resetContext() {
-    internalHistory = [];
     internalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-    resetState();
+    state.resetState();
+  }
+
+  async function connectMcp(config) {
+    var connection = await connectMcpServer(config);
+    for (var i = 0; i < connection.tools.length; i++) {
+      var newTool = connection.tools[i];
+      for (var t = 0; t < mcpTools.length; t++) {
+        if (mcpTools[t].name === newTool.name) {
+          await connection.close();
+          throw new Error('MCP tool name collision: ' + newTool.name + '. Use unique tool names or connect one server at a time.');
+        }
+      }
+      mcpTools.push(newTool);
+    }
+    mcpConnections.push(connection);
+    return connection.tools;
+  }
+
+  async function closeMcp() {
+    for (var i = 0; i < mcpConnections.length; i++) {
+      await mcpConnections[i].close();
+    }
+    mcpConnections = [];
+    mcpTools = [];
+  }
+
+  function appendTools(baseTools, additionalTools) {
+    if (!additionalTools || additionalTools.length === 0) return baseTools;
+    if (!baseTools) return additionalTools.slice();
+    if (Array.isArray(baseTools)) return baseTools.concat(additionalTools);
+    if (baseTools && Array.isArray(baseTools.definitions)) {
+      return {
+        definitions: baseTools.definitions.concat(additionalTools),
+        executeTool: baseTools.executeTool
+      };
+    }
+    return [baseTools].concat(additionalTools);
   }
 
   return {
     name: name,
     instructions: instructions,
     run: run,
-    getHistory: getHistory,
-    setHistory: setHistory,
-    clearHistory: clearHistory,
     getUsage: getUsage,
     resetContext: resetContext,
-    getState: getState,
-    onStateChange: onStateChange,
-    getClient: function() { return clientObj; }
+    connectMcp: connectMcp,
+    closeMcp: closeMcp,
+    getState: state.getState,
+    onStateChange: state.onStateChange,
+    getClient: getClient,
+    getConfig: getConfig
   };
+
+  function getClient() {
+    return clientObj;
+  }
+
+  function getConfig() {
+    return config;
+  }
 }
 
-// Clean Public Exports (Internal helpers createClient & validateTools omitted from public exports)
-export { tool, agentToTool, getState, onStateChange, resetState };
+export { createProvider, tool, agentToTool, connectMcpServer, getState, onStateChange, resetState };
+export default createAgent;

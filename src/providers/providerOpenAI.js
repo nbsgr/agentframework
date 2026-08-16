@@ -1,6 +1,37 @@
 // providerOpenAI.js — OpenAI & OpenAI-Compatible provider using official OpenAI SDK (ESM, No classes)
 import OpenAI from 'openai';
 
+function sleep(ms) {
+  return new Promise(function resolveSleep(resolve) {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function retryWithBackoff(fn, maxRetries, initialDelayMs) {
+  var retries = typeof maxRetries === 'number' ? maxRetries : 3;
+  var delay = initialDelayMs || 1000;
+  var attempt = 0;
+  while (attempt <= retries) {
+    try {
+      return await fn();
+    } catch (err) {
+      attempt++;
+      if (attempt > retries) {
+        throw err;
+      }
+      var status = err ? (err.status || err.statusCode) : undefined;
+      var code = err ? err.code : undefined;
+      var msg = err ? String(err.message || '') : '';
+      var isRetryable = status === 429 || (status >= 500 && status <= 599) || code === 'ECONNRESET' || code === 'ETIMEDOUT' || msg.indexOf('fetch failed') >= 0;
+      if (!isRetryable) {
+        throw err;
+      }
+      await sleep(delay);
+      delay *= 2;
+    }
+  }
+}
+
 export function chat(messages, options) {
   options = options || {};
   var apiKey = options.apiKey || process.env.OPENAI_API_KEY;
@@ -9,6 +40,7 @@ export function chat(messages, options) {
   var isStream = options.stream === true;
   var tools = options.tools || undefined;
   var onStream = options.onStream;
+  var maxRetries = typeof options.maxRetries === 'number' ? options.maxRetries : 3;
 
   var client = options.client || new OpenAI({
     apiKey: apiKey,
@@ -26,20 +58,31 @@ export function chat(messages, options) {
     requestParams.tools = tools;
   }
 
+  if (options.toolChoice || options.tool_choice) {
+    requestParams.tool_choice = options.toolChoice || options.tool_choice;
+  }
+
+  if (options.responseFormat || options.response_format) {
+    requestParams.response_format = options.responseFormat || options.response_format;
+  }
+
   if (typeof options.temperature === 'number') {
     requestParams.temperature = options.temperature;
   }
 
-  if (isStream) {
-    requestParams.stream_options = { include_usage: true };
-    return handleStreaming(client, requestParams, onStream);
-  } else {
-    return handleNonStreaming(client, requestParams);
-  }
+  return retryWithBackoff(function executeOpenAIChat() {
+    if (isStream) {
+      requestParams.stream_options = { include_usage: true };
+      return handleStreaming(client, requestParams, onStream, options.signal);
+    } else {
+      return handleNonStreaming(client, requestParams, options.signal);
+    }
+  }, maxRetries);
 }
 
-function handleNonStreaming(client, requestParams) {
-  return client.chat.completions.create(requestParams).then(function(response) {
+function handleNonStreaming(client, requestParams, signal) {
+  var requestOptions = signal ? { signal: signal } : undefined;
+  return client.chat.completions.create(requestParams, requestOptions).then(function handleResponse(response) {
     var choice = (response.choices && response.choices.length > 0) ? response.choices[0] : null;
     var message = choice ? choice.message : {};
     var content = message.content || '';
@@ -50,10 +93,12 @@ function handleNonStreaming(client, requestParams) {
     for (var i = 0; i < rawToolCalls.length; i++) {
       var tc = rawToolCalls[i];
       var parsedArgs = {};
+      var argumentsParseError = false;
       try {
         parsedArgs = JSON.parse(tc.function.arguments || '{}');
       } catch (_) {
         parsedArgs = {};
+        argumentsParseError = true;
       }
       formattedToolCalls.push({
         id: tc.id || ('call_' + i),
@@ -61,30 +106,46 @@ function handleNonStreaming(client, requestParams) {
         function: {
           name: tc.function.name,
           arguments: parsedArgs
-        }
+        },
+        argumentsParseError: argumentsParseError
       });
     }
 
-    var reasoningContent = message.reasoning_content || message.thinking || '';
+    var reasoningKey = null;
+    var reasoningContent = '';
+
+    if (message.reasoning_content !== undefined && message.reasoning_content !== null) {
+      reasoningKey = 'reasoning_content';
+      reasoningContent = message.reasoning_content;
+    } else if (message.thinking !== undefined && message.thinking !== null) {
+      reasoningKey = 'thinking';
+      reasoningContent = message.thinking;
+    } else if (message.reasoning !== undefined && message.reasoning !== null) {
+      reasoningKey = 'reasoning';
+      reasoningContent = message.reasoning;
+    }
 
     return {
       content: content,
       reasoningContent: reasoningContent,
+      reasoningKey: reasoningKey,
       tool_calls: formattedToolCalls,
       usage: {
         prompt_tokens: usage.prompt_tokens || 0,
         completion_tokens: usage.completion_tokens || 0,
-        total_tokens: usage.total_tokens || (usage.prompt_tokens + usage.completion_tokens)
+        total_tokens: usage.total_tokens || ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0))
       },
       rawResponse: response
     };
   });
 }
 
-async function handleStreaming(client, requestParams, onStream) {
-  var stream = await client.chat.completions.create(requestParams);
+async function handleStreaming(client, requestParams, onStream, signal) {
+  var requestOptions = signal ? { signal: signal } : undefined;
+  var stream = await client.chat.completions.create(requestParams, requestOptions);
   var fullContent = '';
   var fullReasoning = '';
+  var reasoningKey = null;
   var toolCallsMap = {};
   var usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
@@ -98,12 +159,27 @@ async function handleStreaming(client, requestParams, onStream) {
     var choice = (chunk.choices && chunk.choices.length > 0) ? chunk.choices[0] : null;
     if (choice && choice.delta) {
       var delta = choice.delta;
-      if (delta.reasoning_content || delta.thinking) {
-        var rChunk = delta.reasoning_content || delta.thinking;
+      var rChunk = null;
+      var currentKey = null;
+
+      if (delta.reasoning_content !== undefined && delta.reasoning_content !== null) {
+        currentKey = 'reasoning_content';
+        rChunk = delta.reasoning_content;
+      } else if (delta.thinking !== undefined && delta.thinking !== null) {
+        currentKey = 'thinking';
+        rChunk = delta.thinking;
+      } else if (delta.reasoning !== undefined && delta.reasoning !== null) {
+        currentKey = 'reasoning';
+        rChunk = delta.reasoning;
+      }
+
+      if (currentKey && rChunk) {
+        reasoningKey = currentKey;
         fullReasoning += rChunk;
         if (typeof onStream === 'function') {
           onStream({
             type: 'thinking',
+            reasoningKey: currentKey,
             chunk: rChunk,
             fullReasoning: fullReasoning
           });
@@ -143,10 +219,12 @@ async function handleStreaming(client, requestParams, onStream) {
   for (var k = 0; k < keys.length; k++) {
     var rawTc = toolCallsMap[keys[k]];
     var parsedArgs = {};
+    var argumentsParseError = false;
     try {
       parsedArgs = JSON.parse(rawTc.arguments || '{}');
     } catch (_) {
       parsedArgs = {};
+      argumentsParseError = true;
     }
     formattedToolCalls.push({
       id: rawTc.id || keys[k],
@@ -154,13 +232,15 @@ async function handleStreaming(client, requestParams, onStream) {
       function: {
         name: rawTc.name,
         arguments: parsedArgs
-      }
+      },
+      argumentsParseError: argumentsParseError
     });
   }
 
   return {
     content: fullContent,
     reasoningContent: fullReasoning,
+    reasoningKey: reasoningKey,
     tool_calls: formattedToolCalls,
     usage: usage,
     rawResponse: { streamed: true }

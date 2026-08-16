@@ -16,26 +16,103 @@ function parseParameters(params) {
   return { type: 'object', properties: {} };
 }
 
+function extractZodDescription(field) {
+  if (!field) return undefined;
+  if (field.description) return field.description;
+  if (field._def && field._def.description) return field._def.description;
+  return undefined;
+}
+
+function zodFieldToJsonSchema(field) {
+  if (!field) return { type: 'string' };
+
+  var desc = extractZodDescription(field);
+  var def = field._def || {};
+  var typeName = def.typeName || 'ZodString';
+
+  if (typeName === 'ZodOptional' || typeName === 'ZodNullable' || typeName === 'ZodDefault') {
+    var inner = def.innerType || def.type;
+    var innerSchema = zodFieldToJsonSchema(inner);
+    if (desc && !innerSchema.description) {
+      innerSchema.description = desc;
+    }
+    return innerSchema;
+  }
+
+  if (typeName === 'ZodEnum') {
+    var values = def.values || [];
+    var enumSchema = { type: 'string', enum: values };
+    if (desc) enumSchema.description = desc;
+    return enumSchema;
+  }
+
+  if (typeName === 'ZodUnion') {
+    var options = def.options || [];
+    var anyOf = [];
+    for (var i = 0; i < options.length; i++) {
+      anyOf.push(zodFieldToJsonSchema(options[i]));
+    }
+    var unionSchema = { anyOf: anyOf };
+    if (desc) unionSchema.description = desc;
+    return unionSchema;
+  }
+
+  if (typeName === 'ZodNumber') {
+    var numSchema = { type: 'number' };
+    if (desc) numSchema.description = desc;
+    return numSchema;
+  }
+
+  if (typeName === 'ZodBoolean') {
+    var boolSchema = { type: 'boolean' };
+    if (desc) boolSchema.description = desc;
+    return boolSchema;
+  }
+
+  if (typeName === 'ZodArray') {
+    var itemType = def.type;
+    var arrSchema = { type: 'array', items: zodFieldToJsonSchema(itemType) };
+    if (desc) arrSchema.description = desc;
+    return arrSchema;
+  }
+
+  if (typeName === 'ZodObject' || field.shape) {
+    var objSchema = zodToJsonSchema(field);
+    if (desc) objSchema.description = desc;
+    return objSchema;
+  }
+
+  if (typeName === 'ZodRecord') {
+    var recSchema = { type: 'object', additionalProperties: zodFieldToJsonSchema(def.valueType) };
+    if (desc) recSchema.description = desc;
+    return recSchema;
+  }
+
+  var defaultSchema = { type: 'string' };
+  if (desc) defaultSchema.description = desc;
+  return defaultSchema;
+}
+
 function zodToJsonSchema(zodSchema) {
   var properties = {};
   var required = [];
 
-  if (zodSchema && zodSchema.shape) {
-    var shape = zodSchema.shape;
+  var shape = zodSchema && zodSchema.shape;
+  if (!shape && zodSchema && zodSchema._def && zodSchema._def.shape) {
+    shape = typeof zodSchema._def.shape === 'function' ? zodSchema._def.shape() : zodSchema._def.shape;
+  }
+
+  if (shape) {
     var keys = Object.keys(shape);
     for (var i = 0; i < keys.length; i++) {
       var key = keys[i];
       var field = shape[key];
-      var typeName = (field && field._def && field._def.typeName) ? field._def.typeName : 'ZodString';
+      var fieldDef = field && field._def ? field._def : {};
+      var fieldTypeName = fieldDef.typeName || '';
 
-      var jsonType = 'string';
-      if (typeName === 'ZodNumber') jsonType = 'number';
-      else if (typeName === 'ZodBoolean') jsonType = 'boolean';
-      else if (typeName === 'ZodArray') jsonType = 'array';
-      else if (typeName === 'ZodObject') jsonType = 'object';
+      properties[key] = zodFieldToJsonSchema(field);
 
-      properties[key] = { type: jsonType };
-      if (typeName !== 'ZodOptional') {
+      if (fieldTypeName !== 'ZodOptional' && fieldTypeName !== 'ZodDefault') {
         required.push(key);
       }
     }
@@ -136,11 +213,83 @@ export function agentToTool(agentInstance) {
       },
       required: ['task']
     },
-    execute: async function(args) {
-      var subResult = await agentInstance.run(args.task || args.prompt || '');
-      return typeof subResult === 'string' ? subResult : (subResult.content || JSON.stringify(subResult));
-    }
+    execute: executeSubagentTask
   });
+
+  async function executeSubagentTask(args) {
+    var subResult = await agentInstance.run(args.task || args.prompt || '');
+    return typeof subResult === 'string' ? subResult : (subResult.content || JSON.stringify(subResult));
+  }
+}
+
+export function validateToolArguments(args, schema) {
+  var result = validateSchemaValue(args, schema || { type: 'object' }, 'arguments');
+  return result;
+}
+
+function validateSchemaValue(value, schema, location) {
+  if (!schema || typeof schema !== 'object') {
+    return { valid: true };
+  }
+
+  if (schema.enum && Array.isArray(schema.enum) && schema.enum.indexOf(value) === -1) {
+    return { valid: false, error: location + ' must match one of the allowed values.' };
+  }
+
+  if (schema.anyOf && Array.isArray(schema.anyOf)) {
+    for (var a = 0; a < schema.anyOf.length; a++) {
+      if (validateSchemaValue(value, schema.anyOf[a], location).valid) {
+        return { valid: true };
+      }
+    }
+    return { valid: false, error: location + ' does not match the required schema.' };
+  }
+
+  var type = schema.type;
+  if (type === 'object') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { valid: false, error: location + ' must be an object.' };
+    }
+    var required = Array.isArray(schema.required) ? schema.required : [];
+    for (var r = 0; r < required.length; r++) {
+      if (value[required[r]] === undefined) {
+        return { valid: false, error: location + '.' + required[r] + ' is required.' };
+      }
+    }
+    var properties = schema.properties || {};
+    var keys = Object.keys(properties);
+    for (var k = 0; k < keys.length; k++) {
+      var key = keys[k];
+      if (value[key] !== undefined) {
+        var childResult = validateSchemaValue(value[key], properties[key], location + '.' + key);
+        if (!childResult.valid) return childResult;
+      }
+    }
+    return { valid: true };
+  }
+
+  if (type === 'array' && !Array.isArray(value)) {
+    return { valid: false, error: location + ' must be an array.' };
+  }
+  if (type === 'string' && typeof value !== 'string') {
+    return { valid: false, error: location + ' must be a string.' };
+  }
+  if (type === 'number' && (typeof value !== 'number' || Number.isNaN(value))) {
+    return { valid: false, error: location + ' must be a number.' };
+  }
+  if (type === 'integer' && (typeof value !== 'number' || !Number.isInteger(value))) {
+    return { valid: false, error: location + ' must be an integer.' };
+  }
+  if (type === 'boolean' && typeof value !== 'boolean') {
+    return { valid: false, error: location + ' must be a boolean.' };
+  }
+  if (type === 'array' && schema.items) {
+    for (var i = 0; i < value.length; i++) {
+      var itemResult = validateSchemaValue(value[i], schema.items, location + '[' + i + ']');
+      if (!itemResult.valid) return itemResult;
+    }
+  }
+  return { valid: true };
 }
 
 export function validateTools(toolsInput, globalApprovalConfig) {
@@ -205,7 +354,7 @@ export function validateTools(toolsInput, globalApprovalConfig) {
       toolsMap[toolName] = t;
 
       // Register aliases for camelCase vs snake_case naming (e.g. deleteFile <-> delete_file)!
-      var camelName = toolName.replace(/_([a-z])/g, function(_, letter) { return letter.toUpperCase(); });
+      var camelName = toolName.replace(/_([a-z])/g, function toUpperCaseLetter(_, letter) { return letter.toUpperCase(); });
       var snakeName = toolName.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '');
       
       toolsMap[camelName] = t;

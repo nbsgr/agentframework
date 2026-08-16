@@ -1,9 +1,10 @@
-// test_multi_turn_context.js — Test internal context & history retention across turns (ESM, No classes)
+// test_multi_turn_context.js — Test caller-owned context behavior (ESM, No classes)
 import { createAgent } from '../index.js';
+import { buildMessages } from '../src/promptBuilder.js';
 
 async function testMultiTurnContext() {
   console.log('====================================================');
-  console.log('🧠 Testing Internal Multi-Turn Context Retention...');
+  console.log('🧠 Testing Caller-Owned Multi-Turn Context...');
   console.log('====================================================\n');
 
   var passed = 0;
@@ -26,22 +27,14 @@ async function testMultiTurnContext() {
     apiKey: 'ollama'
   });
 
-  // Turn 1: Give information
-  console.log('--- Turn 1: Storing Secret Code ---');
-  var res1 = await agent.run('Remember that the secret project passcode is ALPHA-8842.');
-  assert(res1.success === true, 'Turn 1 completed successfully');
-  assert(agent.getHistory().length >= 2, 'History automatically maintained internally (has prompt + response)');
-
-  // Turn 2: Ask information without passing history array!
-  console.log('\n--- Turn 2: Recalling Secret Code (No history passed by caller) ---');
-  var res2 = await agent.run('What is the secret project passcode I told you?');
-  assert(res2.success === true, 'Turn 2 completed successfully');
-  assert(res2.content.indexOf('8842') !== -1 || res2.content.indexOf('ALPHA') !== -1, 'Agent recalled secret passcode from internal context');
-
-  // Clear context test
-  console.log('\n--- Test: Clearing Context ---');
-  agent.clearHistory();
-  assert(agent.getHistory().length === 0, 'clearHistory() resets internal history to empty array');
+  var firstTurn = [
+    { role: 'user', content: 'The passcode is ALPHA-8842.' },
+    { role: 'assistant', content: 'I will remember it for this caller-managed session.' }
+  ];
+  var messages = buildMessages('What is the passcode?', firstTurn, process.cwd());
+  assert(messages.length === 4, 'Caller-provided history is included in the next prompt');
+  assert(messages[1].content === 'The passcode is ALPHA-8842.', 'Previous user content is included only when explicitly supplied');
+  assert(typeof agent.getHistory === 'undefined', 'Agent does not retain cross-run history internally');
 
   console.log('\n====================================================');
   console.log('📊 Multi-Turn Context Summary: ' + passed + ' Passed, ' + failed + ' Failed');

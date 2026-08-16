@@ -14,13 +14,13 @@ async function testOpenCodeCompatible() {
     stream: true
   });
 
-  agent.onStateChange(function(evt) {
+  agent.onStateChange(function handleStateChange(evt) {
     console.log('🔄 [STATE]', evt.fromState, '➜', evt.toState);
   });
 
   var result = await agent.run('Hello! Explain how async await works in JavaScript in 2 simple sentences.', {
     workspace: process.cwd(),
-    onEvent: function(evt) {
+    onEvent: function handleEvent(evt) {
       if (evt.type === 'stream') {
         process.stdout.write(evt.chunk);
       } else if (evt.type === 'thinking') {
