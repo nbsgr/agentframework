@@ -372,79 +372,141 @@ var getWeatherTool = tool({
 });</code></pre>
       </section>
 
-      <!-- coderun-tools Integration Section -->
+      <!-- Tool Suite Integration Section -->
       <section id="coderun-tools">
-        <h2>Built-in Tools (<code>coderun-tools</code>)</h2>
-        <p>Install the optional package with <code>npm install coderun-tools</code>, then pass its filesystem, terminal, search, or datetime tools to <code>coderun-agent</code>:</p>
+        <h2>Tool Suite Integration (<code>coderun-tools</code>, <code>coderun-browser</code>, <code>coderun-desktop</code>)</h2>
+        <p><code>coderun-agent</code> seamlessly connects with the complete CodeRun Tool Suite. You can pass tools from all three packages together in a single agent:</p>
+
         <pre><code>import { createAgent } from 'coderun-agent';
-import { readFile, writeFile, executeCommand, listDirectory } from 'coderun-tools';
+import coderunTools from 'coderun-tools';
+import coderunBrowser from 'coderun-browser';
+import coderunDesktop from 'coderun-desktop';
+
+// Combine definitions from all three libraries
+var allTools = [].concat(
+  coderunTools.getDefinitions(),
+  coderunBrowser.getDefinitions(),
+  coderunDesktop.getDefinitions()
+);
 
 var agent = createAgent({
-  name: 'DeveloperAgent',
+  name: 'FullAutomationAgent',
+  instructions: 'You are an autonomous agent with workspace file access, web browser automation, and OS desktop controls.',
   provider: 'openai-compatible',
   baseurl: 'http://localhost:11434/v1',
-  apikey: 'ollama',
   model: 'qwen2.5-coder:7b',
-  
-  // 👈 Pass coderun-tools functions directly:
-  tools: [ readFile, writeFile, executeCommand, listDirectory ],
-  workspace: process.cwd()
-});</code></pre>
+  tools: allTools
+});
+
+agent.run('Check workspace files, open example.com in browser, and capture desktop screenshot.');</code></pre>
       </section>
 
       <!-- Human-in-the-Loop Section -->
       <section id="human-in-the-loop">
-        <h2>Human-in-the-Loop (HIL) Security Guide</h2>
-        <p>Protect your environment from unauthorized operations (such as file deletion or terminal execution) using <strong>HIL Permission Controls</strong> (<code>needsApproval</code> + <code>permissionHandler</code>).</p>
+        <h2>Human-in-the-Loop (HIL) Security & Permission Control Guide</h2>
+        <p>Protect your file system, terminal environment, and desktop OS from unauthorized actions using <strong>HIL Permission Controls</strong> (<code>needsApproval</code> + <code>permissionHandler</code>).</p>
 
         <div class="alert alert-warning">
-          <strong>🛡️ Strict Validation Requirement:</strong> When <code>needsApproval</code> is configured (as a boolean or an array of tool names), passing a <code>permissionHandler</code> function is <strong>strictly mandatory</strong>. If missing, <code>createAgent</code> throws an explicit validation error: <code>Error: permissionHandler function is required when needsApproval is configured.</code>
+          <strong>🛡️ Strict Validation Requirement:</strong> When <code>needsApproval</code> is configured (as a boolean, an array of tool names, or inside a tool definition), passing a <code>permissionHandler</code> function is <strong>strictly mandatory</strong>. If missing, <code>createAgent</code> throws an explicit validation error: <code>Error: permissionHandler function is required when needsApproval is configured.</code>
         </div>
 
         <h3>1. Three Approval Configuration Modes</h3>
         <ul>
-          <li><strong>Array of Tool Names:</strong> <code>needsApproval: ['delete_file', 'execute_command']</code> (Gates specific sensitive tools).</li>
-          <li><strong>Global Boolean:</strong> <code>needsApproval: true</code> (Gates ALL tools passed to the agent).</li>
-          <li><strong>Per-Tool Definition:</strong> <code>needsApproval: true</code> inside <code>tool({...})</code>.</li>
+          <li><strong>Mode 1: Array of Specific Tool Names</strong><br>
+            <code>needsApproval: ['delete_file', 'execute_command', 'desktop_click']</code><br>
+            Gates only the specific sensitive tools specified in the array. All other tools run automatically.
+          </li>
+          <li style="margin-top: 10px;"><strong>Mode 2: Global Boolean Flag</strong><br>
+            <code>needsApproval: true</code><br>
+            Gates <strong>ALL tools</strong> passed to the agent. Every single tool call requires user confirmation before execution.
+          </li>
+          <li style="margin-top: 10px;"><strong>Mode 3: Per-Tool Definition Flag</strong><br>
+            <code>tool({ name: 'delete_file', needsApproval: true, execute: ... })</code><br>
+            Flags specific custom tools as requiring approval directly inside their declaration.
+          </li>
         </ul>
 
-        <h3>2. How the User/UI Handlers Work</h3>
-        <p>When an agent encounters a tool requiring approval, it transitions state to <code>'waiting'</code>, emits <code>onEvent({ type: 'state_changed', state: 'waiting', tool, args, id })</code>, and invokes your custom <code>permissionHandler(toolName, args, toolId)</code>:</p>
+        <h3>2. Execution Lifecycle & <code>resolve(true)</code> / <code>resolve(false)</code></h3>
+        <p>When an agent encounters a tool call that requires approval:</p>
+        <ol>
+          <li>The agent pauses the LLM execution turn loop.</li>
+          <li>It transitions state to <code>'waiting'</code> and emits <code>onEvent({ type: 'state_changed', state: 'waiting', tool: toolName, args: args, id: toolId })</code>.</li>
+          <li>It invokes your custom <code>permissionHandler(toolName, args, toolId)</code> callback.</li>
+          <li><strong>User Approves (<code>resolve(true)</code>)</strong>: The agent unfreezes, executes the action on disk/terminal/desktop, and returns the tool output to the LLM.</li>
+          <li><strong>User Denies (<code>resolve(false)</code>)</strong>: The agent unfreezes, <strong>blocks execution</strong>, and feeds <code>"Permission denied by user. Do NOT retry calling this tool."</code> back to the LLM so it can pick a safe alternative.</li>
+        </ol>
 
-        <ul>
-          <li>User calls <strong><code>resolve(true)</code></strong> (or types <code>'y'</code>): Agent unfreezes, executes the tool on disk/terminal, and feeds output to LLM.</li>
-          <li>User calls <strong><code>resolve(false)</code></strong> (or types <code>'n'</code>): Agent unfreezes, <strong>blocks tool execution</strong>, and feeds <code>"Permission denied by user. Do NOT retry calling this tool."</code> to LLM.</li>
-        </ul>
+        <h3>3. Node.js Terminal CLI Approval Example</h3>
+        <pre><code>import readline from 'readline';
+import { createAgent } from 'coderun-agent';
+import coderunTools from 'coderun-tools';
 
-        <h3>HIL Implementation Code Example</h3>
-        <pre><code>function myPermissionHandler(toolName, args, toolId) {
+// Terminal CLI Permission Handler
+function cliPermissionHandler(toolName, args, toolId) {
   return new Promise(function(resolve) {
-    console.log('⚠️ [PERMISSION ASKED] Tool:', toolName, 'Args:', args);
+    console.log('\n⚠️ [SECURITY APPROVAL REQUIRED]');
+    console.log('  Tool requested:', toolName);
+    console.log('  Arguments:', JSON.stringify(args, null, 2));
 
-    // Prompt user in Terminal CLI, HTML UI Modal, or React State:
-    var userAllowed = confirmUserPrompt(toolName, args);
+    var rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
 
-    if (userAllowed) {
-      resolve(true);  // 🟢 User ALLOWED execution!
-    } else {
-      resolve(false); // 🔴 User DENIED execution!
-    }
+    rl.question('Allow tool execution? (y/N): ', function(answer) {
+      rl.close();
+      if (answer.trim().toLowerCase() === 'y') {
+        console.log('🟢 Permission GRANTED by user.');
+        resolve(true); // 👈 ALLOW execution!
+      } else {
+        console.log('🔴 Permission DENIED by user.');
+        resolve(false); // 👈 BLOCK execution!
+      }
+    });
   });
 }
 
 var agent = createAgent({
-  name: 'SecureAgent',
+  name: 'SecureCLIAgent',
   provider: 'openai-compatible',
   baseurl: 'http://localhost:11434/v1',
-  apikey: 'ollama',
   model: 'qwen2.5-coder:7b',
-  tools: [ deleteFile, executeCommand ],
+  tools: coderunTools.getDefinitions(),
   
-  // 👈 Require approval for delete_file tool:
-  needsApproval: ['delete_file'],
-  
-  // 👈 Mandatory permissionHandler function:
-  permissionHandler: myPermissionHandler
+  // Gate dangerous tools:
+  needsApproval: ['delete_file', 'delete_folder', 'execute_command'],
+  permissionHandler: cliPermissionHandler
+});</code></pre>
+
+        <h3>4. Web UI / HTML Modal Approval Example</h3>
+        <pre><code>// Web UI / React Modal Permission Handler
+function webUiPermissionHandler(toolName, args, toolId) {
+  return new Promise(function(resolve) {
+    // 1. Show HTML Modal / Dialog in React or DOM:
+    showApprovalModal({
+      title: 'Tool Permission Request',
+      message: 'Agent wants to run ' + toolName,
+      details: args,
+      onApprove: function() {
+        hideModal();
+        resolve(true);  // 🟢 User clicked ALLOW!
+      },
+      onDeny: function() {
+        hideModal();
+        resolve(false); // 🔴 User clicked DENY!
+      }
+    });
+  });
+}
+
+var agent = createAgent({
+  name: 'WebUIAgent',
+  provider: 'openai-compatible',
+  baseurl: 'http://localhost:11434/v1',
+  model: 'qwen2.5-coder:7b',
+  tools: coderunTools.getDefinitions(),
+  needsApproval: true, // Gate all tools
+  permissionHandler: webUiPermissionHandler
 });</code></pre>
       </section>
 
