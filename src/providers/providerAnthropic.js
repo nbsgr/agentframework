@@ -1,20 +1,54 @@
 // providerAnthropic.js — Anthropic Claude provider using official @anthropic-ai/sdk (ESM, No classes)
 import Anthropic from '@anthropic-ai/sdk';
 
-function sleep(ms) {
-  return new Promise(function resolveSleep(resolve) {
-    setTimeout(resolve, ms);
+function sleep(ms, signal) {
+  return new Promise(function resolveSleep(resolve, reject) {
+    var timer = setTimeout(finishSleep, ms);
+
+    if (signal) {
+      if (signal.aborted) {
+        finishAbort();
+        return;
+      }
+      signal.addEventListener('abort', finishAbort, { once: true });
+    }
+
+    function finishSleep() {
+      cleanup();
+      resolve();
+    }
+
+    function finishAbort() {
+      cleanup();
+      var abortError = new Error('Operation was aborted');
+      abortError.name = 'AbortError';
+      reject(abortError);
+    }
+
+    function cleanup() {
+      clearTimeout(timer);
+      if (signal) {
+        signal.removeEventListener('abort', finishAbort);
+      }
+    }
   });
 }
 
-async function retryWithBackoff(fn, maxRetries, initialDelayMs) {
+async function retryWithBackoff(fn, maxRetries, initialDelayMs, signal) {
   var retries = typeof maxRetries === 'number' ? maxRetries : 3;
   var delay = initialDelayMs || 1000;
   var attempt = 0;
   while (attempt <= retries) {
+    if (signal && signal.aborted) {
+      throw createAbortError();
+    }
+
     try {
       return await fn();
     } catch (err) {
+      if (signal && signal.aborted) {
+        throw err;
+      }
       attempt++;
       if (attempt > retries) {
         throw err;
@@ -24,7 +58,7 @@ async function retryWithBackoff(fn, maxRetries, initialDelayMs) {
       if (!isRetryable) {
         throw err;
       }
-      await sleep(delay);
+      await sleep(delay, signal);
       delay *= 2;
     }
   }
@@ -71,14 +105,24 @@ function convertContentForAnthropic(content) {
   return anthropicBlocks;
 }
 
+function cleanJsonArgumentString(rawStr) {
+  if (typeof rawStr !== 'string') return '{}';
+  var cleaned = rawStr.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  }
+  return cleaned.trim();
+}
+
 function parseToolInput(rawArguments) {
   if (rawArguments && typeof rawArguments === 'object') {
     return rawArguments;
   }
 
   if (typeof rawArguments === 'string') {
+    var cleaned = cleanJsonArgumentString(rawArguments);
     try {
-      return JSON.parse(rawArguments);
+      return JSON.parse(cleaned || '{}');
     } catch (_) {
       return {};
     }
@@ -145,16 +189,21 @@ export function chat(messages, options) {
         content: convertAssistantMessageForAnthropic(msg)
       });
     } else if (msg.role === 'tool') {
-      formattedMessages.push({
-        role: 'user',
-        content: [
-          {
-            type: 'tool_result',
-            tool_use_id: msg.tool_call_id || 'call_0',
-            content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
-          }
-        ]
-      });
+      var toolResultBlock = {
+        type: 'tool_result',
+        tool_use_id: msg.tool_call_id || 'call_0',
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+      };
+
+      var lastMsg = formattedMessages.length > 0 ? formattedMessages[formattedMessages.length - 1] : null;
+      if (lastMsg && lastMsg.role === 'user' && Array.isArray(lastMsg.content) && lastMsg.content.length > 0 && lastMsg.content[0].type === 'tool_result') {
+        lastMsg.content.push(toolResultBlock);
+      } else {
+        formattedMessages.push({
+          role: 'user',
+          content: [toolResultBlock]
+        });
+      }
     }
   }
 
@@ -201,7 +250,13 @@ export function chat(messages, options) {
     } else {
       return handleNonStreaming(client, requestParams, options.signal);
     }
-  }, maxRetries);
+  }, maxRetries, 1000, options.signal);
+}
+
+function createAbortError() {
+  var abortError = new Error('Operation was aborted');
+  abortError.name = 'AbortError';
+  return abortError;
 }
 
 function handleNonStreaming(client, requestParams, signal) {
@@ -215,7 +270,7 @@ function handleNonStreaming(client, requestParams, signal) {
       for (var i = 0; i < response.content.length; i++) {
         var block = response.content[i];
         if (block.type === 'text') {
-          contentText += block.text;
+          contentText += block.text || '';
         } else if (block.type === 'thinking') {
           thinkingText += (block.thinking || block.text || '');
         } else if (block.type === 'tool_use') {
@@ -223,7 +278,7 @@ function handleNonStreaming(client, requestParams, signal) {
             id: block.id,
             type: 'function',
             function: {
-              name: block.name,
+              name: block.name || 'tool',
               arguments: block.input || {}
             }
           });
@@ -298,7 +353,7 @@ function handleStreaming(client, requestParams, onStream, signal) {
               id: block.id,
               type: 'function',
               function: {
-                name: block.name,
+                name: block.name || 'tool',
                 arguments: block.input || {}
               }
             });

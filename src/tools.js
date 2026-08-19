@@ -1,6 +1,6 @@
 // tools.js — Helper and Validator for OpenAI Agents SDK style tools, Zod schemas, coderun-tools & Subagents as tools (ESM, No classes)
 
-function parseParameters(params) {
+export function parseParameters(params) {
   if (!params) return { type: 'object', properties: {} };
 
   // Convert Zod schema object to JSON schema if passed
@@ -195,31 +195,84 @@ export function tool(toolConfig) {
   };
 }
 
-export function agentToTool(agentInstance) {
-  if (!agentInstance || typeof agentInstance.run !== 'function') {
-    throw new Error('agentToTool requires a valid agent instance with a .run() method.');
+export function createSubagentTool(subagentInstance, toolOptions) {
+  if (!subagentInstance || typeof subagentInstance.run !== 'function') {
+    throw new Error('createSubagentTool requires a valid agent instance with a .run() method.');
   }
 
-  var agentName = agentInstance.name || 'Subagent';
-  var cleanName = 'transfer_to_' + agentName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  toolOptions = toolOptions || {};
+  var agentName = subagentInstance.name || 'Subagent';
+  var cleanName = toolOptions.name || ('delegate_to_' + agentName.toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+  var agentInstructions = subagentInstance.instructions || '';
+  var toolDescription = toolOptions.description || (
+    'Delegate a specialized sub-task to ' + agentName + '.\n' +
+    'Instructions & Scope: ' + agentInstructions
+  );
 
   return tool({
     name: cleanName,
-    description: 'Delegate sub-task to ' + agentName + '. Instructions: ' + (agentInstance.instructions || ''),
+    description: toolDescription,
     parameters: {
       type: 'object',
       properties: {
-        task: { type: 'string', description: 'Task prompt or instruction to delegate to ' + agentName }
+        task: { type: 'string', description: 'Task prompt or instruction to delegate to ' + agentName },
+        context: { type: 'string', description: 'Optional relevant background context, constraints, or prior findings for ' + agentName }
       },
       required: ['task']
     },
     execute: executeSubagentTask
   });
 
-  async function executeSubagentTask(args) {
-    var subResult = await agentInstance.run(args.task || args.prompt || '');
-    return typeof subResult === 'string' ? subResult : (subResult.content || JSON.stringify(subResult));
+  async function executeSubagentTask(args, executionContext) {
+    executionContext = executionContext || {};
+    var taskPrompt = (args && args.task) ? args.task : (args && args.prompt ? args.prompt : '');
+    if (args && args.context) {
+      taskPrompt = 'Context from Main Agent:\n' + args.context + '\n\nTask:\n' + taskPrompt;
+    }
+
+    var subRunOptions = {
+      workspace: executionContext.workspaceFolder,
+      signal: executionContext.signal,
+      onEvent: forwardSubagentEvent
+    };
+
+    var subResult = await subagentInstance.run(taskPrompt, subRunOptions);
+
+    if (typeof executionContext.recordUsage === 'function' && subResult && subResult.usage) {
+      executionContext.recordUsage(subResult.usage);
+    }
+
+    if (subResult && subResult.success === false) {
+      return {
+        success: false,
+        error: subResult.error || 'Subagent execution failed',
+        content: 'Subagent ' + agentName + ' failed: ' + (subResult.error || subResult.content || 'Unknown error'),
+        thinking: subResult.thinking || '',
+        usage: subResult.usage
+      };
+    }
+
+    return {
+      success: true,
+      content: (subResult && subResult.content !== undefined) ? subResult.content : JSON.stringify(subResult || {}),
+      thinking: subResult ? subResult.thinking : '',
+      usage: subResult ? subResult.usage : undefined
+    };
+
+    function forwardSubagentEvent(subEvt) {
+      if (typeof executionContext.onEvent === 'function') {
+        executionContext.onEvent({
+          type: 'subagent_event',
+          subagent: agentName,
+          event: subEvt
+        });
+      }
+    }
   }
+}
+
+export function agentToTool(agentInstance, toolOptions) {
+  return createSubagentTool(agentInstance, toolOptions);
 }
 
 export function validateToolArguments(args, schema) {
@@ -332,6 +385,14 @@ export function validateTools(toolsInput, globalApprovalConfig) {
 
     var toolName = t.name || (t.function ? t.function.name : '');
 
+    if (!toolName || typeof toolName !== 'string' || !toolName.trim()) {
+      throw new Error('Every tool must have a valid non-empty name.');
+    }
+
+    if (toolsMap[toolName]) {
+      throw new Error('Duplicate tool name: ' + toolName + '. Tool names must be unique.');
+    }
+
     var isApprovalRequired = t.needsApproval === true;
     if (globalApprovalConfig === true) {
       isApprovalRequired = true;
@@ -356,7 +417,11 @@ export function validateTools(toolsInput, globalApprovalConfig) {
       // Register aliases for camelCase vs snake_case naming (e.g. deleteFile <-> delete_file)!
       var camelName = toolName.replace(/_([a-z])/g, function toUpperCaseLetter(_, letter) { return letter.toUpperCase(); });
       var snakeName = toolName.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '');
-      
+
+      if ((toolsMap[camelName] && toolsMap[camelName] !== t) || (toolsMap[snakeName] && toolsMap[snakeName] !== t)) {
+        throw new Error('Tool name alias collision for: ' + toolName + '. Use unique tool names.');
+      }
+
       toolsMap[camelName] = t;
       toolsMap[snakeName] = t;
     }

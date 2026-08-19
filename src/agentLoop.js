@@ -1,8 +1,8 @@
-// agentLoop.js — Core Agent Turn Loop Engine (ESM, No classes)
 import readline from 'readline';
 import { createProvider } from './providers/providerManager.js';
 import { buildMessages } from './promptBuilder.js';
 import * as agentState from './agentState.js';
+import { executeInputGuardrails, executeToolGuardrails, executeOutputGuardrails, validateStructuredOutput } from './guardrails.js';
 
 function internalCliPrompt(toolName, toolArgs) {
   return new Promise(function resolvePrompt(resolve) {
@@ -21,7 +21,11 @@ function internalCliPrompt(toolName, toolArgs) {
 
 function normalizeToolResult(toolName, toolArgs, rawResult) {
   if (rawResult && rawResult.output !== undefined) {
-    return rawResult;
+    return {
+      toolName: rawResult.toolName || toolName,
+      args: rawResult.args || toolArgs,
+      output: normalizeToolOutput(rawResult.output)
+    };
   }
 
   if (typeof rawResult === 'string') {
@@ -49,6 +53,16 @@ function normalizeToolResult(toolName, toolArgs, rawResult) {
     args: toolArgs,
     output: { success: false, content: 'Tool returned no result.' }
   };
+
+  function normalizeToolOutput(rawOutput) {
+    if (rawOutput && typeof rawOutput === 'object') {
+      return rawOutput;
+    }
+    if (rawOutput === undefined || rawOutput === null) {
+      return { success: false, content: 'Tool returned no result.' };
+    }
+    return { success: true, content: String(rawOutput) };
+  }
 }
 
 export async function runAgentLoop(userPrompt, config, options) {
@@ -64,6 +78,10 @@ export async function runAgentLoop(userPrompt, config, options) {
   var executeTool = options.executeTool;
   var toolsDefinition = options.tools || [];
   var state = options.state || agentState;
+  var inputGuardrails = options.inputGuardrails || config.inputGuardrails || [];
+  var toolGuardrails = options.toolGuardrails || config.toolGuardrails || [];
+  var outputGuardrails = options.outputGuardrails || config.outputGuardrails || [];
+  var outputSchema = options.outputSchema || config.outputSchema;
   var runController = null;
   var timeoutHandle = null;
   var timedOut = false;
@@ -92,6 +110,33 @@ export async function runAgentLoop(userPrompt, config, options) {
       try {
         onEvent(evt);
       } catch (_) {}
+    }
+  }
+
+  var guardrailContext = {
+    workspace: workspace,
+    workspaceFolder: workspace,
+    signal: signal
+  };
+
+  // Run Input Guardrails before turn execution
+  if (userPrompt && Array.isArray(inputGuardrails) && inputGuardrails.length > 0) {
+    var inputCheck = await executeInputGuardrails(inputGuardrails, userPrompt, guardrailContext);
+    if (!inputCheck.pass) {
+      clearRunTimeout();
+      state.transition('failed', { error: inputCheck.error });
+      emitEvent({ type: 'guardrail_blocked', stage: 'input', error: inputCheck.error });
+      return {
+        success: false,
+        status: 'guardrail_blocked',
+        error: inputCheck.error,
+        content: '',
+        thinking: '',
+        toolCalls: [],
+        history: history,
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        iterations: 0
+      };
     }
   }
 
@@ -125,6 +170,14 @@ export async function runAgentLoop(userPrompt, config, options) {
       accumulatedReasoning += streamChunk.chunk;
     }
     emitEvent(streamChunk);
+  }
+
+  function recordUsage(additionalUsage) {
+    if (additionalUsage && typeof additionalUsage === 'object') {
+      totalUsage.prompt_tokens += (additionalUsage.prompt_tokens || 0);
+      totalUsage.completion_tokens += (additionalUsage.completion_tokens || 0);
+      totalUsage.total_tokens += (additionalUsage.total_tokens || ((additionalUsage.prompt_tokens || 0) + (additionalUsage.completion_tokens || 0)));
+    }
   }
 
   async function processSingleToolCall(tc) {
@@ -171,7 +224,11 @@ export async function runAgentLoop(userPrompt, config, options) {
       toolResult = {
         toolName: toolName,
         args: toolArgs,
-        output: { success: false, error: 'Malformed tool arguments', content: 'The model returned malformed tool arguments. Do not retry this tool call without correcting the arguments.' }
+        output: {
+          success: false,
+          error: 'Malformed tool arguments',
+          content: 'The model returned malformed tool arguments for "' + toolName + '". Please provide valid JSON arguments.'
+        }
       };
     } else if (approved) {
       var toolSchema = toolDef && toolDef.function ? toolDef.function.parameters : null;
@@ -184,33 +241,65 @@ export async function runAgentLoop(userPrompt, config, options) {
             output: {
               success: false,
               error: 'Invalid tool arguments',
-              content: validation.error || 'The model returned invalid tool arguments. Correct the arguments before retrying.'
+              content: validation.error || ('The arguments for "' + toolName + '" are invalid. Please correct them according to the tool parameters.')
             }
           };
         }
       }
 
       if (!toolResult) {
-      try {
-        if (options.toolsMap && options.toolsMap[toolName] && typeof options.toolsMap[toolName].execute === 'function') {
-          var execRes = await options.toolsMap[toolName].execute(toolArgs, { workspaceFolder: workspace, needsApproval: requiresApproval, signal: signal });
-          toolResult = normalizeToolResult(toolName, toolArgs, execRes);
-        } else if (typeof executeTool === 'function') {
-          toolResult = normalizeToolResult(toolName, toolArgs, await executeTool(toolName, toolArgs, { workspaceFolder: workspace, needsApproval: requiresApproval, signal: signal }));
-        } else {
-          toolResult = {
-            toolName: toolName,
-            args: toolArgs,
-            output: { success: false, error: 'No executeTool handler provided', content: 'No executeTool handler provided' }
-          };
-        }
-      } catch (execErr) {
-        toolResult = {
-          toolName: toolName,
-          args: toolArgs,
-          output: { success: false, error: execErr.message, content: execErr.message }
+        var toolContext = {
+          workspaceFolder: workspace,
+          needsApproval: requiresApproval,
+          signal: signal,
+          onEvent: emitEvent,
+          recordUsage: recordUsage
         };
-      }
+
+        if (Array.isArray(toolGuardrails) && toolGuardrails.length > 0) {
+          var toolGuardResult = await executeToolGuardrails(toolGuardrails, toolName, toolArgs, toolContext);
+          if (!toolGuardResult.pass) {
+            toolResult = {
+              toolName: toolName,
+              args: toolArgs,
+              output: {
+                success: false,
+                error: 'Tool guardrail blocked execution: ' + toolGuardResult.error,
+                content: 'Action blocked by tool guardrail: ' + toolGuardResult.error
+              }
+            };
+          }
+        }
+
+        if (!toolResult) {
+          try {
+            if (options.toolsMap && options.toolsMap[toolName] && typeof options.toolsMap[toolName].execute === 'function') {
+              var execRes = await options.toolsMap[toolName].execute(toolArgs, toolContext);
+              toolResult = normalizeToolResult(toolName, toolArgs, execRes);
+            } else if (typeof executeTool === 'function') {
+              toolResult = normalizeToolResult(toolName, toolArgs, await executeTool(toolName, toolArgs, toolContext));
+            } else {
+              var availableToolNames = Object.keys(options.toolsMap || {}).filter(function filterUnique(k) {
+                return k.indexOf('_') >= 0 || k.toLowerCase() === k;
+              }).join(', ');
+              toolResult = {
+                toolName: toolName,
+                args: toolArgs,
+                output: {
+                  success: false,
+                  error: 'Tool not found: ' + toolName,
+                  content: 'Tool "' + toolName + '" does not exist. Available tools: ' + (availableToolNames || 'none') + '. Please use an available tool.'
+                }
+              };
+            }
+          } catch (execErr) {
+            toolResult = {
+              toolName: toolName,
+              args: toolArgs,
+              output: { success: false, error: execErr.message, content: execErr.message }
+            };
+          }
+        }
       }
     } else {
       toolResult = {
@@ -230,6 +319,13 @@ export async function runAgentLoop(userPrompt, config, options) {
     };
   }
 
+  function getToolResultString(toolResult) {
+    if (!toolResult || !toolResult.output) return 'No result';
+    if (typeof toolResult.output.content === 'string') return toolResult.output.content;
+    if (toolResult.output.content !== undefined) return JSON.stringify(toolResult.output.content);
+    return JSON.stringify(toolResult.output);
+  }
+
   while (iteration < maxIterations) {
     iteration++;
     emitEvent({ type: 'iteration_start', iteration: iteration });
@@ -238,7 +334,12 @@ export async function runAgentLoop(userPrompt, config, options) {
     var lastRawResponse = null;
 
     try {
+      if (signal && signal.aborted) {
+        throw new Error('Operation was aborted');
+      }
+
       var response = await provider.chat(messages, {
+        client: config.client || options.client,
         apiKey: config.apiKey,
         baseUrl: config.baseUrl || config.baseURL,
         model: config.model,
@@ -299,9 +400,7 @@ export async function runAgentLoop(userPrompt, config, options) {
               args: resItem.args,
               output: resItem.toolResult ? resItem.toolResult.output : null
             });
-            var resStr = typeof resItem.toolResult.output.content === 'string' ?
-              resItem.toolResult.output.content :
-              JSON.stringify(resItem.toolResult.output);
+            var resStr = getToolResultString(resItem.toolResult);
             history.push({
               role: 'tool',
               tool_call_id: resItem.id,
@@ -318,9 +417,7 @@ export async function runAgentLoop(userPrompt, config, options) {
               args: singleRes.args,
               output: singleRes.toolResult ? singleRes.toolResult.output : null
             });
-            var resultString = typeof singleRes.toolResult.output.content === 'string' ?
-              singleRes.toolResult.output.content :
-              JSON.stringify(singleRes.toolResult.output);
+            var resultString = getToolResultString(singleRes.toolResult);
             history.push({
               role: 'tool',
               tool_call_id: singleRes.id,
@@ -334,7 +431,80 @@ export async function runAgentLoop(userPrompt, config, options) {
         state.transition('thinking', { iteration: iteration + 1 });
         emitEvent({ type: 'state_changed', state: 'thinking' });
       } else {
-        // No tool calls — final response reached!
+        // No tool calls — validate outputSchema and outputGuardrails
+        var structuredData = undefined;
+
+        if (outputSchema) {
+          var schemaValidation = validateStructuredOutput(outputSchema, finalContent);
+          if (!schemaValidation.valid) {
+            if (iteration < maxIterations) {
+              history.push({
+                role: 'assistant',
+                content: finalContent || ''
+              });
+              history.push({
+                role: 'user',
+                content: 'Your response did not match the required JSON schema: ' + schemaValidation.error + '. Please output strictly valid JSON conforming to the schema.'
+              });
+              state.transition('thinking', { iteration: iteration + 1, reason: 'structured_output_retry' });
+              emitEvent({ type: 'state_changed', state: 'thinking' });
+              continue;
+            } else {
+              clearRunTimeout();
+              state.transition('failed', { error: schemaValidation.error });
+              emitEvent({ type: 'error', error: schemaValidation.error });
+              return {
+                success: false,
+                status: 'schema_validation_failed',
+                error: schemaValidation.error,
+                content: finalContent,
+                thinking: accumulatedReasoning,
+                toolCalls: accumulatedToolCalls,
+                history: history,
+                usage: totalUsage,
+                iterations: iteration
+              };
+            }
+          } else {
+            structuredData = schemaValidation.data;
+          }
+        }
+
+        if (Array.isArray(outputGuardrails) && outputGuardrails.length > 0) {
+          var outputCheck = await executeOutputGuardrails(outputGuardrails, finalContent, guardrailContext);
+          if (!outputCheck.pass) {
+            if (iteration < maxIterations) {
+              history.push({
+                role: 'assistant',
+                content: finalContent || ''
+              });
+              history.push({
+                role: 'user',
+                content: 'Your response was rejected by safety guardrail: ' + outputCheck.error + '. Please revise your response accordingly.'
+              });
+              state.transition('thinking', { iteration: iteration + 1, reason: 'output_guardrail_retry' });
+              emitEvent({ type: 'state_changed', state: 'thinking' });
+              continue;
+            } else {
+              clearRunTimeout();
+              state.transition('failed', { error: outputCheck.error });
+              emitEvent({ type: 'guardrail_blocked', stage: 'output', error: outputCheck.error });
+              return {
+                success: false,
+                status: 'guardrail_blocked',
+                error: outputCheck.error,
+                content: finalContent,
+                thinking: accumulatedReasoning,
+                toolCalls: accumulatedToolCalls,
+                history: history,
+                usage: totalUsage,
+                iterations: iteration
+              };
+            }
+          }
+        }
+
+        // Final response reached & validated!
         if (response.content || response.reasoningContent) {
           var finalAssistantObj = {
             role: 'assistant',
@@ -354,6 +524,7 @@ export async function runAgentLoop(userPrompt, config, options) {
         return {
           success: true,
           content: finalContent,
+          structuredOutput: structuredData,
           thinking: accumulatedReasoning,
           toolCalls: accumulatedToolCalls,
           history: history,
@@ -382,6 +553,20 @@ export async function runAgentLoop(userPrompt, config, options) {
 
   // Max iterations reached fallback
   clearRunTimeout();
+  if (signal && signal.aborted) {
+    return {
+      success: false,
+      status: timedOut ? 'timeout' : 'aborted',
+      error: timedOut ? 'Operation timed out' : 'Operation was aborted',
+      content: finalContent,
+      thinking: accumulatedReasoning,
+      toolCalls: accumulatedToolCalls,
+      history: history,
+      usage: totalUsage,
+      iterations: iteration
+    };
+  }
+
   state.transition('completed', { reason: 'max_iterations_reached' });
   emitEvent({ type: 'done', content: finalContent, thinking: accumulatedReasoning, toolCalls: accumulatedToolCalls, usage: totalUsage });
 

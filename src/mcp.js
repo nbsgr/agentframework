@@ -134,16 +134,26 @@ export async function connectMcpServer(config) {
     version: config.clientVersion || '1.0.4'
   });
   var transport = await createMcpTransport(config);
-  await client.connect(transport);
   var rawTools = [];
-  var cursor = undefined;
-  do {
-    var discovered = await client.listTools(cursor ? { cursor: cursor } : undefined);
-    if (discovered && Array.isArray(discovered.tools)) {
-      rawTools = rawTools.concat(discovered.tools);
+
+  try {
+    await client.connect(transport);
+    var cursor = undefined;
+    do {
+      var discovered = await client.listTools(cursor ? { cursor: cursor } : undefined);
+      if (discovered && Array.isArray(discovered.tools)) {
+        rawTools = rawTools.concat(discovered.tools);
+      }
+      cursor = discovered ? discovered.nextCursor : undefined;
+    } while (cursor);
+  } catch (connectError) {
+    if (client && typeof client.close === 'function') {
+      try {
+        await client.close();
+      } catch (_) {}
     }
-    cursor = discovered ? discovered.nextCursor : undefined;
-  } while (cursor);
+    throw connectError;
+  }
   var tools = [];
 
   for (var i = 0; i < rawTools.length; i++) {

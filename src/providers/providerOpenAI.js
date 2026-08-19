@@ -1,20 +1,54 @@
 // providerOpenAI.js — OpenAI & OpenAI-Compatible provider using official OpenAI SDK (ESM, No classes)
 import OpenAI from 'openai';
 
-function sleep(ms) {
-  return new Promise(function resolveSleep(resolve) {
-    setTimeout(resolve, ms);
+function sleep(ms, signal) {
+  return new Promise(function resolveSleep(resolve, reject) {
+    var timer = setTimeout(finishSleep, ms);
+
+    if (signal) {
+      if (signal.aborted) {
+        finishAbort();
+        return;
+      }
+      signal.addEventListener('abort', finishAbort, { once: true });
+    }
+
+    function finishSleep() {
+      cleanup();
+      resolve();
+    }
+
+    function finishAbort() {
+      cleanup();
+      var abortError = new Error('Operation was aborted');
+      abortError.name = 'AbortError';
+      reject(abortError);
+    }
+
+    function cleanup() {
+      clearTimeout(timer);
+      if (signal) {
+        signal.removeEventListener('abort', finishAbort);
+      }
+    }
   });
 }
 
-async function retryWithBackoff(fn, maxRetries, initialDelayMs) {
+async function retryWithBackoff(fn, maxRetries, initialDelayMs, signal) {
   var retries = typeof maxRetries === 'number' ? maxRetries : 3;
   var delay = initialDelayMs || 1000;
   var attempt = 0;
   while (attempt <= retries) {
+    if (signal && signal.aborted) {
+      throw createAbortError();
+    }
+
     try {
       return await fn();
     } catch (err) {
+      if (signal && signal.aborted) {
+        throw err;
+      }
       attempt++;
       if (attempt > retries) {
         throw err;
@@ -26,7 +60,7 @@ async function retryWithBackoff(fn, maxRetries, initialDelayMs) {
       if (!isRetryable) {
         throw err;
       }
-      await sleep(delay);
+      await sleep(delay, signal);
       delay *= 2;
     }
   }
@@ -55,7 +89,20 @@ export function chat(messages, options) {
   };
 
   if (tools && Array.isArray(tools) && tools.length > 0) {
-    requestParams.tools = tools;
+    var cleanTools = [];
+    for (var i = 0; i < tools.length; i++) {
+      var t = tools[i];
+      var fn = t.function || t;
+      cleanTools.push({
+        type: 'function',
+        function: {
+          name: fn.name,
+          description: fn.description || '',
+          parameters: fn.parameters || { type: 'object', properties: {} }
+        }
+      });
+    }
+    requestParams.tools = cleanTools;
   }
 
   if (options.toolChoice || options.tool_choice) {
@@ -77,14 +124,58 @@ export function chat(messages, options) {
     } else {
       return handleNonStreaming(client, requestParams, options.signal);
     }
-  }, maxRetries);
+  }, maxRetries, 1000, options.signal);
+}
+
+function createAbortError() {
+  var abortError = new Error('Operation was aborted');
+  abortError.name = 'AbortError';
+  return abortError;
+}
+
+function cleanJsonArgumentString(rawStr) {
+  if (typeof rawStr !== 'string') return '{}';
+  var cleaned = rawStr.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  }
+  return cleaned.trim();
+}
+
+function parseToolArgumentsSafely(rawArguments) {
+  if (rawArguments && typeof rawArguments === 'object') {
+    return {
+      arguments: rawArguments,
+      argumentsParseError: false,
+      rawArguments: JSON.stringify(rawArguments)
+    };
+  }
+
+  var str = typeof rawArguments === 'string' ? rawArguments : '{}';
+  var cleaned = cleanJsonArgumentString(str);
+
+  try {
+    var parsed = JSON.parse(cleaned || '{}');
+    return {
+      arguments: parsed,
+      argumentsParseError: false,
+      rawArguments: str
+    };
+  } catch (parseErr) {
+    return {
+      arguments: {},
+      argumentsParseError: true,
+      rawArguments: str,
+      error: parseErr.message
+    };
+  }
 }
 
 function handleNonStreaming(client, requestParams, signal) {
   var requestOptions = signal ? { signal: signal } : undefined;
   return client.chat.completions.create(requestParams, requestOptions).then(function handleResponse(response) {
     var choice = (response.choices && response.choices.length > 0) ? response.choices[0] : null;
-    var message = choice ? choice.message : {};
+    var message = choice && choice.message ? choice.message : {};
     var content = message.content || '';
     var rawToolCalls = message.tool_calls || [];
     var usage = response.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
@@ -92,23 +183,22 @@ function handleNonStreaming(client, requestParams, signal) {
     var formattedToolCalls = [];
     for (var i = 0; i < rawToolCalls.length; i++) {
       var tc = rawToolCalls[i];
-      var parsedArgs = {};
-      var argumentsParseError = false;
-      try {
-        parsedArgs = JSON.parse(tc.function.arguments || '{}');
-      } catch (_) {
-        parsedArgs = {};
-        argumentsParseError = true;
-      }
-      formattedToolCalls.push({
+      var rawFnArgs = (tc.function && tc.function.arguments !== undefined) ? tc.function.arguments : (tc.arguments || '{}');
+      var parseResult = parseToolArgumentsSafely(rawFnArgs);
+      var toolCallItem = {
         id: tc.id || ('call_' + i),
         type: 'function',
         function: {
-          name: tc.function.name,
-          arguments: parsedArgs
+          name: tc.function && tc.function.name ? tc.function.name : (tc.name || 'tool'),
+          arguments: parseResult.arguments
         },
-        argumentsParseError: argumentsParseError
-      });
+        rawArguments: parseResult.rawArguments,
+        argumentsParseError: parseResult.argumentsParseError
+      };
+      if (tc.extra_content !== undefined) {
+        toolCallItem.extra_content = tc.extra_content;
+      }
+      formattedToolCalls.push(toolCallItem);
     }
 
     var reasoningKey = null;
@@ -205,6 +295,7 @@ async function handleStreaming(client, requestParams, onStream, signal) {
             toolCallsMap[idx] = { id: dtc.id || ('call_' + idx), name: '', arguments: '' };
           }
           if (dtc.id) toolCallsMap[idx].id = dtc.id;
+          if (dtc.extra_content !== undefined) toolCallsMap[idx].extra_content = dtc.extra_content;
           if (dtc.function) {
             if (dtc.function.name) toolCallsMap[idx].name += dtc.function.name;
             if (dtc.function.arguments) toolCallsMap[idx].arguments += dtc.function.arguments;
@@ -218,23 +309,21 @@ async function handleStreaming(client, requestParams, onStream, signal) {
   var keys = Object.keys(toolCallsMap);
   for (var k = 0; k < keys.length; k++) {
     var rawTc = toolCallsMap[keys[k]];
-    var parsedArgs = {};
-    var argumentsParseError = false;
-    try {
-      parsedArgs = JSON.parse(rawTc.arguments || '{}');
-    } catch (_) {
-      parsedArgs = {};
-      argumentsParseError = true;
-    }
-    formattedToolCalls.push({
+    var parseResult = parseToolArgumentsSafely(rawTc.arguments || '{}');
+    var streamToolCallItem = {
       id: rawTc.id || keys[k],
       type: 'function',
       function: {
         name: rawTc.name,
-        arguments: parsedArgs
+        arguments: parseResult.arguments
       },
-      argumentsParseError: argumentsParseError
-    });
+      rawArguments: parseResult.rawArguments,
+      argumentsParseError: parseResult.argumentsParseError
+    };
+    if (rawTc.extra_content !== undefined) {
+      streamToolCallItem.extra_content = rawTc.extra_content;
+    }
+    formattedToolCalls.push(streamToolCallItem);
   }
 
   return {

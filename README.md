@@ -27,11 +27,13 @@ Source code and issue tracking are available in the GitHub repository:
 ## ✨ Features
 
 - ⚡ **Lightweight & Pure JavaScript**: ES Modules (ESM) written in clean, robust JavaScript. Zero TypeScript compilation needed.
-- 🌐 **Two Provider Contracts**: Use `openai-compatible` for Ollama, OpenCode Zen, Groq, OpenRouter, Gemini OpenAI-compatible endpoints, OpenAI, and custom endpoints; use `anthropic` for Anthropic's native API.
+- 🌐 **Universal Multi-Provider Support**: Built on strict `openai-compatible` (Ollama, Gemini, OpenCode Zen, Groq, OpenRouter, OpenAI, DeepSeek) and `anthropic` provider adapters.
+- 🛡️ **Guardrail Pipelines**: Configurable, multi-step inspection pipelines for user input (`inputGuardrails`), tool execution (`toolGuardrails`), and model output (`outputGuardrails`).
+- 📐 **Structured Output Enforcement**: Enforce guaranteed JSON output matching any Zod or JSON schema (`outputSchema`) with automatic LLM self-correction.
 - 💬 **Real-Time Streaming**: Stream reasoning/thinking tokens (`evt.type === 'thinking'`), response text (`evt.type === 'stream'`), and tool execution events in real time.
 - 🛡️ **Human-in-the-Loop (HITL) Safety**: Built-in permission control layer (`needsApproval` + `permissionHandler`). Pause execution for user approval (CLI prompt, HTML Modal, or React UI) before running sensitive operations.
 - 📦 **Universal Tool Support**: Seamlessly accepts custom tools via `tool({...})`, Zod schemas, JSON schemas, tools from `coderun-tools`, MCP tools, or subagent instances.
-- 🤖 **Subagents as Tools**: Pass any agent instance directly into `tools: [ subAgent ]` to enable hierarchical multi-agent delegation.
+- 🤖 **Subagents & Parallel Delegation**: Delegate tasks to subagents as tools with parallel execution, token aggregation, and event bubbling.
 
 ---
 
@@ -319,6 +321,89 @@ var result = await manager.run('Research quantum computing breakthroughs.');
 
 ---
 
+## 🛡️ Guardrail Pipelines (Input, Tool & Output Safety)
+
+Guardrails allow you to define programmable safety checkpoints at each stage of the agent loop:
+- **`inputGuardrails`**: Inspects user prompt before LLM invocation (e.g. blocking prompt injections or banned keywords).
+- **`toolGuardrails`**: Inspects tool arguments before execution (e.g. preventing path traversal outside the workspace).
+- **`outputGuardrails`**: Inspects the final assistant output before returning to the caller.
+
+```javascript
+import { createAgent } from 'coderun-agent';
+
+// 1. Input Guardrail: Block prompt injection
+function checkPromptSafety(prompt, context) {
+  var lower = prompt.toLowerCase();
+  if (lower.indexOf('ignore all instructions') >= 0 || lower.indexOf('drop database') >= 0) {
+    return { pass: false, error: 'Security tripwire: Unsafe prompt detected.' };
+  }
+  return { pass: true };
+}
+
+// 2. Tool Guardrail: Prevent directory escape
+function checkWorkspaceBoundary(toolName, args, context) {
+  if (args && args.path && typeof args.path === 'string') {
+    if (args.path.indexOf('..') >= 0 || args.path.startsWith('/etc')) {
+      return { pass: false, error: 'Path traversal forbidden outside workspace.' };
+    }
+  }
+  return { pass: true };
+}
+
+// 3. Output Guardrail: Enforce response format
+function checkOutputFormat(content, context) {
+  if (content.indexOf('SUMMARY:') === -1) {
+    return { pass: false, error: 'Response must include a "SUMMARY:" section.' };
+  }
+  return { pass: true };
+}
+
+var agent = createAgent({
+  name: 'GuardedAgent',
+  provider: 'openai-compatible',
+  baseurl: 'https://opencode.ai/zen/v1',
+  apikey: 'sk-your-key',
+  model: 'deepseek-v4-flash-free',
+  inputGuardrails: [checkPromptSafety],
+  toolGuardrails: [checkWorkspaceBoundary],
+  outputGuardrails: [checkOutputFormat]
+});
+```
+
+---
+
+## 📐 Structured Output Enforcement (`outputSchema`)
+
+Pass an `outputSchema` (a Zod schema or standard JSON schema) to guarantee valid, typed JSON output. If the model emits invalid JSON or schema violations, the engine automatically prompts the model to self-correct within the loop:
+
+```javascript
+import { createAgent } from 'coderun-agent';
+import { z } from 'zod';
+
+// Define expected structured output schema:
+var LeadExtractionSchema = z.object({
+  fullName: z.string().describe('Full name of contact'),
+  email: z.string().describe('Email address'),
+  score: z.number().describe('Lead score from 1-100')
+});
+
+var agent = createAgent({
+  provider: 'openai-compatible',
+  baseurl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+  apikey: 'YOUR_GEMINI_API_KEY',
+  model: 'gemini-flash-latest',
+  outputSchema: LeadExtractionSchema
+});
+
+var result = await agent.run('Extract contact info: John Doe, reachable at john@example.com, high purchase intent (95).');
+
+// Access parsed object directly:
+console.log(result.structuredOutput);
+// { fullName: "John Doe", email: "john@example.com", score: 95 }
+```
+
+---
+
 ## 🌐 Supported Model Providers
 
 ```javascript
@@ -330,7 +415,15 @@ createAgent({
   model: 'qwen2.5-coder:7b'
 });
 
-// 2. OpenCode Zen / DeepSeek
+// 2. Google Gemini (via OpenAI-compatible endpoint)
+createAgent({
+  provider: 'openai-compatible',
+  baseurl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+  apikey: 'YOUR_GEMINI_API_KEY',
+  model: 'gemini-flash-latest'
+});
+
+// 3. OpenCode Zen / DeepSeek
 createAgent({
   provider: 'openai-compatible',
   baseurl: 'https://opencode.ai/zen/v1',
@@ -338,7 +431,7 @@ createAgent({
   model: 'deepseek-v4-flash-free'
 });
 
-// 3. OpenAI
+// 4. OpenAI
 createAgent({
   provider: 'openai-compatible',
   baseurl: 'https://api.openai.com/v1',
@@ -346,7 +439,7 @@ createAgent({
   model: 'gpt-4o'
 });
 
-// 4. Anthropic Claude
+// 5. Anthropic Claude
 createAgent({
   provider: 'anthropic',
   apikey: 'sk-ant-your-claude-key',
@@ -398,10 +491,11 @@ Every `await agent.run()` resolves to a structured result object:
 
 ```javascript
 {
-  success: true,         // Boolean indicating clean turn completion
-  content: "...",        // Final text answer from the agent
-  thinking: "...",       // Reasoning/thinking tokens collected
-  toolCalls: [           // Clean array of executed tools
+  success: true,               // Boolean indicating clean turn completion
+  content: "...",              // Final text answer from the agent
+  structuredOutput: { ... },   // Parsed JSON object when outputSchema is provided
+  thinking: "...",             // Reasoning/thinking tokens collected
+  toolCalls: [                 // Clean array of executed tools
     {
       id: "call_12345",
       name: "get_weather",
@@ -409,12 +503,12 @@ Every `await agent.run()` resolves to a structured result object:
       output: { success: true, content: "Weather in Tokyo is sunny 25°C." }
     }
   ],
-  usage: {               // Token consumption metrics
+  usage: {                     // Token consumption metrics
     prompt_tokens: 140,
     completion_tokens: 45,
     total_tokens: 185
   },
-  history: [...]         // Complete transcript produced during this run only
+  history: [...]               // Complete transcript produced during this run only
 }
 ```
 

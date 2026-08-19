@@ -3,8 +3,9 @@ import { runAgentLoop } from './src/agentLoop.js';
 import { createProvider } from './src/providers/providerManager.js';
 import { createState, getState, onStateChange, resetState } from './src/agentState.js';
 import { createClient } from './src/client.js';
-import { tool, validateTools, validateToolArguments, agentToTool } from './src/tools.js';
+import { tool, validateTools, validateToolArguments, agentToTool, createSubagentTool } from './src/tools.js';
 import { connectMcpServer } from './src/mcp.js';
+import { executeInputGuardrails, executeToolGuardrails, executeOutputGuardrails, validateStructuredOutput } from './src/guardrails.js';
 
 export function createAgent(config) {
   if (!config || typeof config !== 'object') {
@@ -31,7 +32,16 @@ export function createAgent(config) {
     }
   }
 
-  var rawTools = config.tools;
+  var rawTools = config.tools ? (Array.isArray(config.tools) ? config.tools.slice() : [config.tools]) : [];
+  if (Array.isArray(config.subagents)) {
+    for (var s = 0; s < config.subagents.length; s++) {
+      var subItem = config.subagents[s];
+      if (subItem && typeof subItem.run === 'function') {
+        rawTools.push(createSubagentTool(subItem));
+      }
+    }
+  }
+
   var validatedTools = validateTools(rawTools, globalApproval);
 
   function hasApprovalRequiredTools(toolValidation) {
@@ -70,7 +80,7 @@ export function createAgent(config) {
   function runInternal(prompt, runOptions) {
     runOptions = runOptions || {};
 
-    var activeClient = runOptions.client ? createClient(runOptions.client) : clientObj;
+    var activeClient = runOptions.client ? (runOptions.client.client ? runOptions.client : createClient(runOptions.client)) : clientObj;
     var mergedModel = (runOptions.model && typeof runOptions.model === 'string') ? runOptions.model.trim() : model;
 
     var mergedConfig = {
@@ -127,7 +137,11 @@ export function createAgent(config) {
       executeTool: runValidatedTools.executeTool || runOptions.executeTool || config.executeTool,
       onEvent: runOptions.onEvent || config.onEvent,
       permissionHandler: runPermissionHandler,
-      askPermission: runPermissionHandler
+      askPermission: runPermissionHandler,
+      inputGuardrails: runOptions.inputGuardrails || config.inputGuardrails || [],
+      toolGuardrails: runOptions.toolGuardrails || config.toolGuardrails || [],
+      outputGuardrails: runOptions.outputGuardrails || config.outputGuardrails || [],
+      outputSchema: runOptions.outputSchema || config.outputSchema
     };
 
     return runAgentLoop(prompt, mergedConfig, mergedRunOptions).then(handleRunResult);
@@ -168,11 +182,21 @@ export function createAgent(config) {
   }
 
   async function closeMcp() {
+    var firstError = null;
     for (var i = 0; i < mcpConnections.length; i++) {
-      await mcpConnections[i].close();
+      try {
+        await mcpConnections[i].close();
+      } catch (closeError) {
+        if (!firstError) {
+          firstError = closeError;
+        }
+      }
     }
     mcpConnections = [];
     mcpTools = [];
+    if (firstError) {
+      throw firstError;
+    }
   }
 
   function appendTools(baseTools, additionalTools) {
@@ -211,5 +235,5 @@ export function createAgent(config) {
   }
 }
 
-export { createProvider, tool, agentToTool, connectMcpServer, getState, onStateChange, resetState };
+export { createProvider, tool, agentToTool, createSubagentTool, connectMcpServer, getState, onStateChange, resetState, executeInputGuardrails, executeToolGuardrails, executeOutputGuardrails, validateStructuredOutput };
 export default createAgent;

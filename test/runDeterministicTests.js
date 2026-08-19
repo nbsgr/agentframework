@@ -11,7 +11,13 @@ var testFiles = [
   'test/test_stateless_and_reasoning.js',
   'test/test_user_history_format.js',
   'test/test_zod_descriptions.js',
-  'test/test_tool_argument_validation.js'
+  'test/test_tool_argument_validation.js',
+  'test/test_subagent_coordination.js',
+  'test/test_subagent_parallel_integration.js',
+  'test/test_core_safety.js',
+  'test/test_messy_tool_calls.js',
+  'test/test_anthropic_tool_batching.js',
+  'test/test_guardrails_pipeline.js'
 ];
 
 function runTest(fileName) {

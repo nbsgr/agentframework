@@ -250,6 +250,8 @@
       <a href="#tools" class="nav-link">Tools & Schemas</a>
       <a href="#coderun-tools" class="nav-link">coderun-tools Integration</a>
       <a href="#mcp" class="nav-link">MCP Servers</a>
+      <a href="#guardrails" class="nav-link">Guardrails Pipeline</a>
+      <a href="#structured-output" class="nav-link">Structured Output</a>
       <a href="#human-in-the-loop" class="nav-link">Human-in-the-Loop (HIL)</a>
       <a href="#streaming" class="nav-link">Streaming & Reasoning</a>
       <a href="#subagents" class="nav-link">Agents as Tools</a>
@@ -399,6 +401,81 @@ var agent = createAgent({
 });
 
 agent.run('Check workspace files, open example.com in browser, and capture desktop screenshot.');</code></pre>
+      </section>
+
+      <!-- Guardrails Pipeline Section -->
+      <section id="guardrails">
+        <h2>🛡️ Guardrails Pipeline (Input, Tool & Output Safety)</h2>
+        <p>Guardrails allow you to define programmable safety checkpoints at each stage of the agent execution lifecycle. Pass arrays of inspection functions in <code>inputGuardrails</code>, <code>toolGuardrails</code>, and <code>outputGuardrails</code>:</p>
+
+        <pre><code>import { createAgent } from 'coderun-agent';
+
+// 1. Input Guardrail: Block prompt injection or destructive requests
+function checkPromptSafety(prompt, context) {
+  var lower = prompt.toLowerCase();
+  if (lower.indexOf('ignore all instructions') >= 0 || lower.indexOf('drop database') >= 0) {
+    return { pass: false, error: 'Security tripwire: Unsafe prompt detected.' };
+  }
+  return { pass: true };
+}
+
+// 2. Tool Guardrail: Prevent directory escape outside workspace
+function checkWorkspaceBoundary(toolName, args, context) {
+  if (args && args.path && typeof args.path === 'string') {
+    if (args.path.indexOf('..') >= 0 || args.path.startsWith('/etc') || args.path.startsWith('C:\\Windows')) {
+      return { pass: false, error: 'Path traversal forbidden outside workspace.' };
+    }
+  }
+  return { pass: true };
+}
+
+// 3. Output Guardrail: Enforce response format rules
+function checkOutputFormat(content, context) {
+  if (content.indexOf('SUMMARY:') === -1) {
+    return { pass: false, error: 'Response must include a "SUMMARY:" section.' };
+  }
+  return { pass: true };
+}
+
+var agent = createAgent({
+  name: 'GuardedAgent',
+  provider: 'openai-compatible',
+  baseurl: 'https://opencode.ai/zen/v1',
+  apikey: 'sk-your-key',
+  model: 'deepseek-v4-flash-free',
+  inputGuardrails: [checkPromptSafety],
+  toolGuardrails: [checkWorkspaceBoundary],
+  outputGuardrails: [checkOutputFormat]
+});</code></pre>
+      </section>
+
+      <!-- Structured Output Section -->
+      <section id="structured-output">
+        <h2>📐 Structured Output Enforcement (<code>outputSchema</code>)</h2>
+        <p>Pass an <code>outputSchema</code> (a Zod schema or standard JSON schema) to guarantee valid, typed JSON output. If the model emits invalid JSON or schema violations, the engine automatically prompts the model to self-correct within the loop:</p>
+
+        <pre><code>import { createAgent } from 'coderun-agent';
+import { z } from 'zod';
+
+var LeadExtractionSchema = z.object({
+  fullName: z.string().describe('Full name of contact'),
+  email: z.string().describe('Email address'),
+  score: z.number().describe('Lead score from 1-100')
+});
+
+var agent = createAgent({
+  provider: 'openai-compatible',
+  baseurl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+  apikey: 'YOUR_GEMINI_API_KEY',
+  model: 'gemini-flash-latest',
+  outputSchema: LeadExtractionSchema
+});
+
+var result = await agent.run('Extract contact info: John Doe, reachable at john@example.com, high purchase intent (95).');
+
+// Access parsed structured object directly:
+console.log(result.structuredOutput);
+// Output: { fullName: "John Doe", email: "john@example.com", score: 95 }</code></pre>
       </section>
 
       <!-- Human-in-the-Loop Section -->
@@ -584,6 +661,11 @@ var manager = createAgent({
             </tr>
             <tr>
               <td><code>openai-compatible</code></td>
+              <td><code>https://generativelanguage.googleapis.com/v1beta/openai/</code></td>
+              <td><code>gemini-flash-latest</code> (Google Gemini)</td>
+            </tr>
+            <tr>
+              <td><code>openai-compatible</code></td>
               <td><code>https://opencode.ai/zen/v1</code></td>
               <td><code>deepseek-v4-flash-free</code> (OpenCode)</td>
             </tr>
@@ -649,6 +731,26 @@ var manager = createAgent({
               <td>Array of tools (custom tools, <code>coderun-tools</code>, or subagents).</td>
             </tr>
             <tr>
+              <td><code>inputGuardrails</code></td>
+              <td>No</td>
+              <td>Array of check functions: <code>[function(prompt, context) { ... }]</code>. Blocks unsafe prompts before LLM call.</td>
+            </tr>
+            <tr>
+              <td><code>toolGuardrails</code></td>
+              <td>No</td>
+              <td>Array of check functions: <code>[function(toolName, args, context) { ... }]</code>. Blocks invalid or unsafe tool parameters.</td>
+            </tr>
+            <tr>
+              <td><code>outputGuardrails</code></td>
+              <td>No</td>
+              <td>Array of check functions: <code>[function(content, context) { ... }]</code>. Validates final output against compliance rules.</td>
+            </tr>
+            <tr>
+              <td><code>outputSchema</code></td>
+              <td>No</td>
+              <td>Zod schema or JSON schema. Enforces valid structured JSON output with automatic LLM self-correction.</td>
+            </tr>
+            <tr>
               <td><code>needsApproval</code></td>
               <td>No</td>
               <td>Approval policy: <code>true</code> or array of tool names <code>['delete_file']</code>.</td>
@@ -705,6 +807,11 @@ var manager = createAgent({
               <td>Final text answer generated by the assistant.</td>
             </tr>
             <tr>
+              <td><code>structuredOutput</code></td>
+              <td>Object</td>
+              <td>Parsed JSON object returned when <code>outputSchema</code> is provided.</td>
+            </tr>
+            <tr>
               <td><code>thinking</code></td>
               <td>String</td>
               <td>Accumulated reasoning/thinking tokens.</td>
@@ -739,6 +846,8 @@ var manager = createAgent({
       <a href="#tools" class="toc-link">Tools & Schemas</a>
       <a href="#coderun-tools" class="toc-link">coderun-tools Integration</a>
       <a href="#mcp" class="toc-link">MCP Servers</a>
+      <a href="#guardrails" class="toc-link">Guardrails Pipeline</a>
+      <a href="#structured-output" class="toc-link">Structured Output</a>
       <a href="#human-in-the-loop" class="toc-link">Human-in-the-Loop (HIL)</a>
       <a href="#streaming" class="toc-link">Streaming & Reasoning</a>
       <a href="#subagents" class="toc-link">Agents as Tools</a>

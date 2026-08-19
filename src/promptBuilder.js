@@ -81,16 +81,67 @@ function buildUserContent(userPrompt, options) {
   return promptText;
 }
 
+function groupHistoryIntoTurns(history) {
+  var turns = [];
+  var i = 0;
+  while (i < history.length) {
+    var item = history[i];
+    if (!item) {
+      i++;
+      continue;
+    }
+
+    if (item.user_prompt !== undefined || item.prompt !== undefined || item.response !== undefined) {
+      turns.push([item]);
+      i++;
+      continue;
+    }
+
+    if (item.role === 'assistant' && item.tool_calls && item.tool_calls.length > 0) {
+      var turnGroup = [item];
+      var nextIdx = i + 1;
+      while (nextIdx < history.length && history[nextIdx] && history[nextIdx].role === 'tool') {
+        turnGroup.push(history[nextIdx]);
+        nextIdx++;
+      }
+      turns.push(turnGroup);
+      i = nextIdx;
+      continue;
+    }
+
+    turns.push([item]);
+    i++;
+  }
+  return turns;
+}
+
 function pruneHistory(history, maxMessages) {
   if (!maxMessages || typeof maxMessages !== 'number' || history.length <= maxMessages) {
     return history;
   }
-  var sliced = history.slice(history.length - maxMessages);
-  // Ensure we don't start midway through an orphaned tool result
-  while (sliced.length > 0 && (sliced[0].role === 'tool' || sliced[0].role === 'assistant')) {
-    sliced.shift();
+
+  var turns = groupHistoryIntoTurns(history);
+  var flattened = [];
+  var turnIndex = turns.length - 1;
+
+  while (turnIndex >= 0) {
+    var currentTurn = turns[turnIndex];
+    if (flattened.length + currentTurn.length <= maxMessages || flattened.length === 0) {
+      for (var k = currentTurn.length - 1; k >= 0; k--) {
+        flattened.unshift(currentTurn[k]);
+      }
+      turnIndex--;
+    } else {
+      break;
+    }
   }
-  return sliced;
+
+  // Ensure we don't start with an orphaned tool result
+  while (flattened.length > 0 && flattened[0].role === 'tool') {
+    flattened.shift();
+  }
+
+  return flattened;
 }
 
 function extractUserPromptFromTurn(turn) {
@@ -116,14 +167,18 @@ function formatProviderToolCalls(toolCalls) {
     var functionCall = toolCall.function || {};
     var rawArguments = toolCall.args !== undefined ? toolCall.args : (toolCall.arguments !== undefined ? toolCall.arguments : functionCall.arguments);
     var formattedArguments = typeof rawArguments === 'string' ? rawArguments : JSON.stringify(rawArguments || {});
-    formattedCalls.push({
+    var callObj = {
       id: toolCall.id || ('call_' + i),
       type: 'function',
       function: {
         name: toolCall.name || functionCall.name || 'tool',
         arguments: formattedArguments
       }
-    });
+    };
+    if (toolCall.extra_content !== undefined) {
+      callObj.extra_content = toolCall.extra_content;
+    }
+    formattedCalls.push(callObj);
   }
 
   return formattedCalls;
