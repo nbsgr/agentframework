@@ -14,10 +14,15 @@ var testFiles = [
   'test/test_tool_argument_validation.js',
   'test/test_subagent_coordination.js',
   'test/test_subagent_parallel_integration.js',
+  'test/test_subagent_full_agents.js',
+  'test/test_real_world_comparison_suite.js',
   'test/test_core_safety.js',
   'test/test_messy_tool_calls.js',
   'test/test_anthropic_tool_batching.js',
-  'test/test_guardrails_pipeline.js'
+  'test/test_guardrails_pipeline.js',
+  'test/test_security_aliases_and_options.js',
+  'test/test_config_overrides.js',
+  'test/test_openai_sdk_comparison.js'
 ];
 
 function runTest(fileName) {

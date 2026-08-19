@@ -22,6 +22,9 @@ export function createAgent(config) {
   var stream = config.stream !== undefined ? Boolean(config.stream) : true;
   var workspace = typeof config.workspace === 'string' ? config.workspace : process.cwd();
   var defaultMaxIterations = typeof config.maxIterations === 'number' ? config.maxIterations : 50;
+  if (typeof config.maxIterations === 'number' && (!Number.isFinite(config.maxIterations) || config.maxIterations < 1)) {
+    throw new Error('maxIterations must be a positive integer (got: ' + config.maxIterations + ').');
+  }
 
   var globalApproval = config.needsApproval;
   var globalPermissionHandler = config.permissionHandler || config.askPermission;
@@ -118,9 +121,14 @@ export function createAgent(config) {
     var mergedRunOptions = {
       workspace: runOptions.workspace || workspace,
       history: currentHistory,
+      providerClient: activeClient,
       instructions: runOptions.instructions || instructions,
       stream: runOptions.stream !== undefined ? Boolean(runOptions.stream) : stream,
-      streamOptions: runOptions.streamOptions || { include_usage: true },
+      streamOptions: runOptions.streamOptions !== undefined ? runOptions.streamOptions : config.streamOptions,
+      temperature: runOptions.temperature !== undefined ? runOptions.temperature : config.temperature,
+      maxTokens: runOptions.maxTokens !== undefined ? runOptions.maxTokens : (runOptions.max_tokens !== undefined ? runOptions.max_tokens : (config.maxTokens !== undefined ? config.maxTokens : config.max_tokens)),
+      maxToolOutputChars: runOptions.maxToolOutputChars !== undefined ? runOptions.maxToolOutputChars : config.maxToolOutputChars,
+      maxContextTokens: runOptions.maxContextTokens !== undefined ? runOptions.maxContextTokens : config.maxContextTokens,
       maxIterations: mergedConfig.maxIterations,
       parallelTools: mergedConfig.parallelTools,
       maxRetries: mergedConfig.maxRetries,
@@ -231,9 +239,18 @@ export function createAgent(config) {
   }
 
   function getConfig() {
-    return config;
+    var safeConfig = {};
+    var configKeys = Object.keys(config);
+    for (var ck = 0; ck < configKeys.length; ck++) {
+      var cfgKey = configKeys[ck];
+      if (cfgKey === 'apikey' || cfgKey === 'apiKey' || cfgKey === 'api_key') {
+        continue;
+      }
+      safeConfig[cfgKey] = config[cfgKey];
+    }
+    return safeConfig;
   }
 }
 
-export { createProvider, tool, agentToTool, createSubagentTool, connectMcpServer, getState, onStateChange, resetState, executeInputGuardrails, executeToolGuardrails, executeOutputGuardrails, validateStructuredOutput };
+export { createProvider, tool, validateTools, validateToolArguments, agentToTool, createSubagentTool, connectMcpServer, getState, onStateChange, resetState, executeInputGuardrails, executeToolGuardrails, executeOutputGuardrails, validateStructuredOutput };
 export default createAgent;

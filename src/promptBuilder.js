@@ -285,5 +285,135 @@ export function buildMessages(userPrompt, history, workspace, options) {
     }
   }
 
+  if (typeof options.maxContextTokens === 'number' && options.maxContextTokens > 0) {
+    return applyContextBudget(messages, options.maxContextTokens);
+  }
+
   return messages;
+}
+
+function estimateTokenCount(value) {
+  if (value === null || value === undefined) return 0;
+  if (Array.isArray(value)) {
+    var arrayTotal = 0;
+    for (var a = 0; a < value.length; a++) {
+      var block = value[a];
+      if (block && typeof block === 'object') {
+        if (typeof block.text === 'string') {
+          arrayTotal += Math.max(1, Math.round(block.text.length / 4));
+        } else if (block.type === 'image_url') {
+          arrayTotal += 8;
+        } else {
+          arrayTotal += Math.max(1, Math.round(JSON.stringify(block).length / 4));
+        }
+      } else if (typeof block === 'string') {
+        arrayTotal += Math.max(1, Math.round(block.length / 4));
+      }
+    }
+    return arrayTotal;
+  }
+  if (typeof value !== 'string') value = String(value);
+  return Math.max(1, Math.round(value.length / 4));
+}
+
+function countMessageTokens(msg) {
+  if (!msg || typeof msg !== 'object') return 0;
+  var itemTotal = estimateTokenCount(msg.content);
+  if (Array.isArray(msg.tool_calls)) {
+    for (var t = 0; t < msg.tool_calls.length; t++) {
+      itemTotal += estimateTokenCount(JSON.stringify(msg.tool_calls[t]));
+    }
+  }
+  return itemTotal;
+}
+
+function groupMessageIndices(messages) {
+  var groups = [];
+  var i = 1;
+  while (i < messages.length) {
+    var group = [i];
+    var msg = messages[i];
+    if (msg && msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      var j = i + 1;
+      while (j < messages.length && messages[j] && messages[j].role === 'tool') {
+        group.push(j);
+        j++;
+      }
+      i = j;
+    } else {
+      i++;
+    }
+    groups.push(group);
+  }
+  return groups;
+}
+
+function groupTokenSum(messages, group) {
+  var sum = 0;
+  for (var g = 0; g < group.length; g++) {
+    sum += countMessageTokens(messages[group[g]]);
+  }
+  return sum;
+}
+
+function applyContextBudget(messages, maxTokens) {
+  if (!Array.isArray(messages) || messages.length <= 1) return messages;
+
+  var totalTokens = 0;
+  for (var t = 0; t < messages.length; t++) {
+    totalTokens += countMessageTokens(messages[t]);
+  }
+  if (totalTokens <= maxTokens) return messages;
+
+  var groups = groupMessageIndices(messages);
+  if (groups.length === 0) return messages;
+
+  var lastUserIndex = -1;
+  for (var lu = messages.length - 1; lu >= 0; lu--) {
+    if (messages[lu] && messages[lu].role === 'user') {
+      lastUserIndex = lu;
+      break;
+    }
+  }
+  if (lastUserIndex === -1) return messages;
+
+  var lastUserGroup = groups.length - 1;
+  for (var gk = groups.length - 1; gk >= 0; gk--) {
+    if (groups[gk][0] <= lastUserIndex && lastUserIndex <= groups[gk][groups[gk].length - 1]) {
+      lastUserGroup = gk;
+      break;
+    }
+  }
+
+  var keptGroups = [];
+  var running = 0;
+
+  for (var tail = groups.length - 1; tail >= lastUserGroup; tail--) {
+    keptGroups.unshift(groups[tail]);
+    running += groupTokenSum(messages, groups[tail]);
+  }
+
+  var headEstablished = false;
+  for (var older = lastUserGroup - 1; older >= 0; older--) {
+    var olderTokens = groupTokenSum(messages, groups[older]);
+    if (running + olderTokens > maxTokens) break;
+    if (!headEstablished) {
+      if (messages[groups[older][0]] && messages[groups[older][0]].role === 'user') {
+        keptGroups.unshift(groups[older]);
+        running += olderTokens;
+        headEstablished = true;
+      }
+    } else {
+      keptGroups.unshift(groups[older]);
+      running += olderTokens;
+    }
+  }
+
+  var trimmedMessages = [messages[0]];
+  for (var kg = 0; kg < keptGroups.length; kg++) {
+    for (var km = 0; km < keptGroups[kg].length; km++) {
+      trimmedMessages.push(messages[keptGroups[kg][km]]);
+    }
+  }
+  return trimmedMessages;
 }

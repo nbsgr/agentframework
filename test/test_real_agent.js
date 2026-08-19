@@ -24,7 +24,7 @@ async function testRealAgent() {
   var result = await agent.run('Read package.json and summarize what dependencies are installed.', {
     workspace: process.cwd(),
     history: [],
-    onEvent: function handleEvent(evt) {
+    onEvent(evt) {
       if (evt.type === 'stream') {
         process.stdout.write(evt.chunk);
       } else if (evt.type === 'tool_call') {
@@ -33,7 +33,7 @@ async function testRealAgent() {
         console.log('✅ [TOOL RESULT]', evt.tool, '-> Success:', evt.result.output.success);
       }
     },
-    askPermission: function handlePermission(toolName, args) {
+    askPermission(toolName, args) {
       console.log('❓ [PERMISSION CHECK] Approving:', toolName);
       return Promise.resolve(true);
     }

@@ -21,7 +21,7 @@ async function runAnthropicBatchTest() {
 
   var mockClient = {
     messages: {
-      create: async function mockCreate(params) {
+      async create(params) {
         var msgs = params.messages;
         var toolResultUserMsgs = [];
         for (var i = 0; i < msgs.length; i++) {

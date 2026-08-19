@@ -157,6 +157,10 @@ export function tool(toolConfig) {
     throw new Error('Tool must have a valid non-empty "name".');
   }
 
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) {
+    throw new Error('Invalid tool name: "' + name + '". Tool names must be 1-64 characters using only letters, numbers, underscores, or dashes.');
+  }
+
   var needsApproval = false;
   if (toolConfig.needsApproval === true || toolConfig.requiresApproval === true) {
     needsApproval = true;
@@ -202,7 +206,12 @@ export function createSubagentTool(subagentInstance, toolOptions) {
 
   toolOptions = toolOptions || {};
   var agentName = subagentInstance.name || 'Subagent';
-  var cleanName = toolOptions.name || ('delegate_to_' + agentName.toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+  var snakeAgentName = agentName
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^a-zA-Z0-9_]/g, '_')
+    .toLowerCase()
+    .replace(/^_+|_+$/g, '');
+  var cleanName = toolOptions.name || ('delegate_to_' + snakeAgentName);
   var agentInstructions = subagentInstance.instructions || '';
   var toolDescription = toolOptions.description || (
     'Delegate a specialized sub-task to ' + agentName + '.\n' +
@@ -212,6 +221,7 @@ export function createSubagentTool(subagentInstance, toolOptions) {
   return tool({
     name: cleanName,
     description: toolDescription,
+    needsApproval: toolOptions.needsApproval === true || toolOptions.requiresApproval === true,
     parameters: {
       type: 'object',
       properties: {
@@ -230,11 +240,64 @@ export function createSubagentTool(subagentInstance, toolOptions) {
       taskPrompt = 'Context from Main Agent:\n' + args.context + '\n\nTask:\n' + taskPrompt;
     }
 
+    var ownPermissionHandler = null;
+    if (subagentInstance && typeof subagentInstance.getConfig === 'function') {
+      var subConfig = subagentInstance.getConfig() || {};
+      ownPermissionHandler = subConfig.permissionHandler || subConfig.askPermission || null;
+    }
+
     var subRunOptions = {
       workspace: executionContext.workspaceFolder,
       signal: executionContext.signal,
       onEvent: forwardSubagentEvent
     };
+
+    if (executionContext.parallelTools !== undefined) {
+      subRunOptions.parallelTools = executionContext.parallelTools;
+    }
+
+    if (executionContext.stream !== undefined) {
+      subRunOptions.stream = executionContext.stream;
+    }
+
+    // Forward the parent run's live connection (client override) so delegated
+    // subagents reuse it when they target the same endpoint (e.g. shared mock or
+    // shared API key). A subagent with its own distinct provider/endpoint keeps
+    // its own connection.
+    if (executionContext.client && subagentSharesParentEndpoint()) {
+      subRunOptions.client = executionContext.client;
+    }
+
+    // Cascade the caller's permission handler as the subagent run default, unless
+    // the subagent itself defines one (its own flow wins — same loop, same rules).
+    if (!ownPermissionHandler && typeof executionContext.permissionHandler === 'function') {
+      subRunOptions.permissionHandler = executionContext.permissionHandler;
+    }
+
+    function subagentSharesParentEndpoint() {
+      var parentClient = executionContext.client;
+      var parentProvider = String(parentClient.provider || parentClient.clientProvider || '').toLowerCase();
+      var parentBase = String(parentClient.baseurl || parentClient.baseUrl || '').toLowerCase();
+      if (!parentProvider && !parentBase) {
+        return true;
+      }
+      if (subagentInstance && typeof subagentInstance.getClient === 'function') {
+        var subClientObj = subagentInstance.getClient() || {};
+        var subProvider = String(subClientObj.provider || '').toLowerCase();
+        var subBase = String(subClientObj.baseurl || subClientObj.baseUrl || '').toLowerCase();
+        if (subProvider && parentProvider) {
+          return subProvider === parentProvider && subBase === parentBase;
+        }
+        if (subBase && parentBase) {
+          return subBase === parentBase;
+        }
+        if (subProvider && parentProvider) {
+          return subProvider === parentProvider;
+        }
+        return false;
+      }
+      return true;
+    }
 
     var subResult = await subagentInstance.run(taskPrompt, subRunOptions);
 
@@ -389,6 +452,10 @@ export function validateTools(toolsInput, globalApprovalConfig) {
       throw new Error('Every tool must have a valid non-empty name.');
     }
 
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(toolName)) {
+      throw new Error('Invalid tool name: "' + toolName + '". Tool names must be 1-64 characters using only letters, numbers, underscores, or dashes.');
+    }
+
     if (toolsMap[toolName]) {
       throw new Error('Duplicate tool name: ' + toolName + '. Tool names must be unique.');
     }
@@ -400,7 +467,7 @@ export function validateTools(toolsInput, globalApprovalConfig) {
       isApprovalRequired = true;
     }
 
-    definitions.push({
+    var toolDefinition = {
       type: 'function',
       needsApproval: isApprovalRequired,
       function: {
@@ -408,10 +475,13 @@ export function validateTools(toolsInput, globalApprovalConfig) {
         description: t.description || (t.function ? t.function.description : ''),
         parameters: t.parameters || (t.function ? t.function.parameters : { type: 'object', properties: {} })
       }
-    });
+    };
+
+    definitions.push(toolDefinition);
 
     if (toolName) {
       t.needsApproval = isApprovalRequired;
+      t.definition = toolDefinition;
       toolsMap[toolName] = t;
 
       // Register aliases for camelCase vs snake_case naming (e.g. deleteFile <-> delete_file)!

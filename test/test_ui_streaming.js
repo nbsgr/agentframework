@@ -25,7 +25,7 @@ async function testUIStreaming() {
   // Run turn with real-time UI Event Listener
   var result = await agent.run('Read package.json and summarize it', {
     workspace: process.cwd(),
-    onEvent: function handleEvent(event) {
+    onEvent(event) {
       switch (event.type) {
         case 'thinking':
           // Display in collapsible Thinking Process Card in UI

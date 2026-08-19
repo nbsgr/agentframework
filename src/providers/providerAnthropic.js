@@ -1,68 +1,6 @@
 // providerAnthropic.js — Anthropic Claude provider using official @anthropic-ai/sdk (ESM, No classes)
 import Anthropic from '@anthropic-ai/sdk';
-
-function sleep(ms, signal) {
-  return new Promise(function resolveSleep(resolve, reject) {
-    var timer = setTimeout(finishSleep, ms);
-
-    if (signal) {
-      if (signal.aborted) {
-        finishAbort();
-        return;
-      }
-      signal.addEventListener('abort', finishAbort, { once: true });
-    }
-
-    function finishSleep() {
-      cleanup();
-      resolve();
-    }
-
-    function finishAbort() {
-      cleanup();
-      var abortError = new Error('Operation was aborted');
-      abortError.name = 'AbortError';
-      reject(abortError);
-    }
-
-    function cleanup() {
-      clearTimeout(timer);
-      if (signal) {
-        signal.removeEventListener('abort', finishAbort);
-      }
-    }
-  });
-}
-
-async function retryWithBackoff(fn, maxRetries, initialDelayMs, signal) {
-  var retries = typeof maxRetries === 'number' ? maxRetries : 3;
-  var delay = initialDelayMs || 1000;
-  var attempt = 0;
-  while (attempt <= retries) {
-    if (signal && signal.aborted) {
-      throw createAbortError();
-    }
-
-    try {
-      return await fn();
-    } catch (err) {
-      if (signal && signal.aborted) {
-        throw err;
-      }
-      attempt++;
-      if (attempt > retries) {
-        throw err;
-      }
-      var status = err ? (err.status || err.statusCode) : undefined;
-      var isRetryable = status === 429 || (status >= 500 && status <= 599);
-      if (!isRetryable) {
-        throw err;
-      }
-      await sleep(delay, signal);
-      delay *= 2;
-    }
-  }
-}
+import { retryWithBackoff, streamWithBackoff } from './retry.js';
 
 function convertContentForAnthropic(content) {
   if (typeof content === 'string') return content;
@@ -220,11 +158,17 @@ export function chat(messages, options) {
     }
   }
 
+  var maxTokens = typeof options.max_tokens === 'number' ? options.max_tokens : (typeof options.maxTokens === 'number' ? options.maxTokens : 4096);
+
   var requestParams = {
     model: model,
-    max_tokens: options.max_tokens || 4096,
+    max_tokens: maxTokens,
     messages: formattedMessages
   };
+
+  if (typeof options.temperature === 'number') {
+    requestParams.temperature = options.temperature;
+  }
 
   if (systemPrompt) {
     requestParams.system = systemPrompt;
@@ -244,19 +188,25 @@ export function chat(messages, options) {
     }
   }
 
-  return retryWithBackoff(function executeAnthropicChat() {
-    if (isStream) {
-      return handleStreaming(client, requestParams, onStream, options.signal);
-    } else {
-      return handleNonStreaming(client, requestParams, options.signal);
+  if (isStream) {
+    var streamEmitted = false;
+    function wrapAnthropicStream(evt) {
+      streamEmitted = true;
+      if (typeof onStream === 'function') {
+        onStream(evt);
+      }
     }
-  }, maxRetries, 1000, options.signal);
-}
+    var wrappedOnStream = wrapAnthropicStream;
+    return streamWithBackoff(function executeAnthropicStream() {
+      return handleStreaming(client, requestParams, wrappedOnStream, options.signal);
+    }, maxRetries, 1000, options.signal, function anyStreamChunk() {
+      return streamEmitted;
+    });
+  }
 
-function createAbortError() {
-  var abortError = new Error('Operation was aborted');
-  abortError.name = 'AbortError';
-  return abortError;
+  return retryWithBackoff(function executeAnthropicChat() {
+    return handleNonStreaming(client, requestParams, options.signal);
+  }, maxRetries, 1000, options.signal);
 }
 
 function handleNonStreaming(client, requestParams, signal) {

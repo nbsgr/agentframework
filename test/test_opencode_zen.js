@@ -10,7 +10,7 @@ async function testOpenCodeZen() {
     provider: 'compatible',
     baseUrl: 'https://opencode.ai/zen/v1',
     model: 'hy3-free',
-    apiKey: 'sk-2GS9T54rzLK0s77eoaRwRf3cMOKBuY66XdHXaNfjSFW6icvxaasXF302j8Mdn3Gn',
+    apiKey: process.env.OPENCODE_API_KEY || 'your-opencode-api-key',
     stream: true
   });
 
@@ -20,7 +20,7 @@ async function testOpenCodeZen() {
 
   var result = await agent.run('Hello! Explain how async await works in JavaScript in 2 simple sentences.', {
     workspace: process.cwd(),
-    onEvent: function handleEvent(evt) {
+    onEvent(evt) {
       if (evt.type === 'stream') {
         process.stdout.write(evt.chunk);
       } else if (evt.type === 'thinking') {

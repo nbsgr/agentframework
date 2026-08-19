@@ -52,7 +52,7 @@ async function runGuardrailsTests() {
       properties: { path: { type: 'string' } },
       required: ['path']
     },
-    execute: async function executeRead(args) {
+    async execute(args) {
       return 'File content of: ' + args.path;
     }
   });
@@ -69,7 +69,7 @@ async function runGuardrailsTests() {
   var mockClient = {
     chat: {
       completions: {
-        create: async function mockCreate(params) {
+        async create(params) {
           var msgs = params.messages;
           var hasToolMsg = false;
           for (var m = 0; m < msgs.length; m++) {
@@ -143,7 +143,7 @@ async function runGuardrailsTests() {
   var mockOutputClient = {
     chat: {
       completions: {
-        create: async function mockOutputCreate(params) {
+        async create(params) {
           var msgs = params.messages;
           if (msgs.length > 2 && msgs[msgs.length - 1].content.indexOf('safety guardrail') >= 0) {
             return {
@@ -186,7 +186,7 @@ async function runGuardrailsTests() {
   var mockStructuredClient = {
     chat: {
       completions: {
-        create: async function mockSchemaCreate(params) {
+        async create(params) {
           var msgs = params.messages;
           if (msgs.length > 2 && msgs[msgs.length - 1].content.indexOf('JSON schema') >= 0) {
             // Model self-corrects to valid JSON

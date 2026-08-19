@@ -1,4 +1,18 @@
 // mcp.js — Optional MCP client integration (ESM, No classes)
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+function readPackageVersion() {
+  try {
+    var mcpDir = path.dirname(fileURLToPath(import.meta.url));
+    var pkgPath = path.join(mcpDir, '..', 'package.json');
+    var parsed = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return (parsed && typeof parsed.version === 'string') ? parsed.version : '0.0.0';
+  } catch (_) {
+    return '0.0.0';
+  }
+}
 
 async function loadMcpClientModule() {
   try {
@@ -62,7 +76,7 @@ function getMcpText(result) {
 }
 
 function createMcpToolDefinition(client, mcpTool) {
-  var toolName = mcpTool.name;
+  var toolName = String(mcpTool.name || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'mcp_tool';
 
   async function executeMcpTool(args, context) {
     var requestOptions = context && context.signal ? { signal: context.signal } : undefined;
@@ -131,7 +145,7 @@ export async function connectMcpServer(config) {
 
   var client = new clientModule.Client({
     name: config.clientName || 'coderun-agent',
-    version: config.clientVersion || '1.0.5'
+    version: config.clientVersion || readPackageVersion()
   });
   var transport = await createMcpTransport(config);
   var rawTools = [];

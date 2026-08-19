@@ -1,9 +1,33 @@
 {
   "name": "coderun-agent",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Standalone, multi-provider AI Agent framework in plain JavaScript",
   "main": "index.js",
   "type": "module",
+  "author": "nbsgr",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nbsgr/agentframework.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nbsgr/agentframework/issues"
+  },
+  "homepage": "https://nbsgr.github.io/agentframework/",
+  "keywords": [
+    "agent",
+    "agents",
+    "ai",
+    "llm",
+    "ollama",
+    "anthropic",
+    "claude",
+    "gemini",
+    "openai",
+    "mcp",
+    "subagents",
+    "guardrails",
+    "tool-calling"
+  ],
   "exports": {
     ".": "./index.js"
   },

@@ -10,12 +10,12 @@ async function testOpenCodeApiThinking() {
     provider: 'openai',
     baseUrl: 'https://opencodeapi.com/v1',
     model: 'hy3free',
-    apiKey: 'sk-2GS9T54rzLK0s77eoaRwRf3cMOKBuY66XdHXaNfjSFW6icvxaasXF302j8Mdn3Gn',
+    apiKey: process.env.OPENCODE_API_KEY || 'your-opencode-api-key',
     stream: true
   });
 
   var result = await agent.run('How many r\'s are in the word strawberry?', {
-    onEvent: function handleEvent(evt) {
+    onEvent(evt) {
       if (evt.type === 'thinking') {
         process.stdout.write('💭 [THINKING]: ' + evt.chunk);
       } else if (evt.type === 'stream') {

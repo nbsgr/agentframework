@@ -23,7 +23,7 @@ async function testReadPackageJson() {
 
   var result = await agent.run('Use the read_file tool to read package.json and summarize its name, version, and dependencies.', {
     workspace: process.cwd(),
-    onEvent: function handleEvent(evt) {
+    onEvent(evt) {
       if (evt.type === 'stream') {
         process.stdout.write(evt.chunk);
       } else if (evt.type === 'tool_call') {

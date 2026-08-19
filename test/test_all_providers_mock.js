@@ -1,12 +1,5 @@
 // test_all_providers_mock.js — Test suite for all 7 providers without local model installation (ESM, No classes)
 import { createProvider, getProviderName } from '../src/providers/providerManager.js';
-import * as providerOllama from '../src/providers/providerOllama.js';
-import * as providerOpenAI from '../src/providers/providerOpenAI.js';
-import * as providerAnthropic from '../src/providers/providerAnthropic.js';
-import * as providerGemini from '../src/providers/providerGemini.js';
-import * as providerGroq from '../src/providers/providerGroq.js';
-import * as providerOpenRouter from '../src/providers/providerOpenRouter.js';
-import * as providerCompatible from '../src/providers/providerCompatible.js';
 
 async function testAllProvidersMock() {
   console.log('====================================================');

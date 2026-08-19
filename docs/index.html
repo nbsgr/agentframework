@@ -231,7 +231,7 @@
   <!-- Top Header Navigation Bar -->
   <header class="top-nav">
     <div class="brand">
-      🤖 CodeRun Agents SDK <span class="badge">v1.0.4</span>
+      🤖 CodeRun Agents SDK <span class="badge">v1.0.6</span>
     </div>
     <div class="search-box">
       🔍 Search documentation... <span style="margin-left:auto; font-size:10px; background:var(--bg-sidebar); padding:2px 6px; border-radius:4px;">Ctrl K</span>
@@ -636,7 +636,7 @@ var manager = createAgent({
   baseurl: 'http://localhost:11434/v1',
   apikey: 'ollama',
   model: 'qwen2.5-coder:7b',
-  tools: [ researcher ] // 👈 Automatically available as transfer_to_researcher tool!
+  tools: [ researcher ] // 👈 Automatically available as delegate_to_researcher tool!
 });</code></pre>
       </section>
 
@@ -717,13 +717,13 @@ var manager = createAgent({
             </tr>
             <tr>
               <td><code>apikey</code></td>
-              <td>Yes</td>
-              <td>API key or bearer token.</td>
+              <td>No</td>
+              <td>API key or bearer token. Optional when the provider SDK environment variable (<code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>) is set.</td>
             </tr>
             <tr>
               <td><code>model</code></td>
-              <td>Yes</td>
-              <td>Model string identifier.</td>
+              <td>No</td>
+              <td>Model string identifier (default: <code>"qwen2.5-coder:7b"</code>).</td>
             </tr>
             <tr>
               <td><code>tools</code></td>
@@ -774,6 +774,76 @@ var manager = createAgent({
               <td><code>timeoutMs</code></td>
               <td>No</td>
           <td>Abort the provider request and cooperative tool work after the specified number of milliseconds. Timeout results use <code>status: 'timeout'</code>.</td>
+            </tr>
+            <tr>
+              <td><code>maxIterations</code></td>
+              <td>No</td>
+              <td>Maximum agent-loop turns (default: <code>50</code>). Termination returns <code>status: 'max_iterations_reached'</code>.</td>
+            </tr>
+            <tr>
+              <td><code>maxRetries</code></td>
+              <td>No</td>
+              <td>Provider request retry count on transient failures (default: <code>3</code>).</td>
+            </tr>
+            <tr>
+              <td><code>temperature</code></td>
+              <td>No</td>
+              <td>Sampling temperature passed to the provider.</td>
+            </tr>
+            <tr>
+              <td><code>maxTokens</code> / <code>max_tokens</code></td>
+              <td>No</td>
+              <td>Max generated tokens per request. Anthropic default: <code>4096</code>; OpenAI-compatible defaults to the provider's server default when omitted.</td>
+            </tr>
+            <tr>
+              <td><code>parallelTools</code></td>
+              <td>No</td>
+              <td>Execute multiple tool calls concurrently in one iteration (default: <code>false</code>).</td>
+            </tr>
+            <tr>
+              <td><code>toolChoice</code> / <code>tool_choice</code></td>
+              <td>No</td>
+              <td>Control tool selection: <code>'auto'</code>, <code>'none'</code>, <code>'required'</code>, or a specific tool object.</td>
+            </tr>
+            <tr>
+              <td><code>responseFormat</code> / <code>response_format</code></td>
+              <td>No</td>
+              <td>Provider response format object (e.g. <code>{ type: 'json_object' }</code>).</td>
+            </tr>
+            <tr>
+              <td><code>streamOptions</code> / <code>stream_options</code></td>
+              <td>No</td>
+              <td>Streaming extras; set <code>false</code> to omit <code>stream_options</code> for endpoints that reject them.</td>
+            </tr>
+            <tr>
+              <td><code>maxHistoryMessages</code> / <code>maxHistory</code></td>
+              <td>No</td>
+              <td>Keep only the most recent N history messages (turn-aware pruning). Disabled when omitted.</td>
+            </tr>
+            <tr>
+              <td><code>maxContextTokens</code></td>
+              <td>No</td>
+              <td>Approximate token budget for the whole request; oldest complete turns are trimmed to fit. Disabled when omitted.</td>
+            </tr>
+            <tr>
+              <td><code>maxToolOutputChars</code></td>
+              <td>No</td>
+              <td>Truncate tool result text stored in history (default: <code>6000</code>, set <code>0</code> to disable).</td>
+            </tr>
+            <tr>
+              <td><code>onEvent</code></td>
+              <td>No</td>
+              <td>Global streaming/state event callback: <code>function(evt)</code>.</td>
+            </tr>
+            <tr>
+              <td><code>askPermission</code></td>
+              <td>No</td>
+              <td>Alias for <code>permissionHandler</code>.</td>
+            </tr>
+            <tr>
+              <td><code>subagents</code></td>
+              <td>No</td>
+              <td>Array of agent instances made available as delegation tools.</td>
             </tr>
             <tr>
               <td><code>signal</code></td>
@@ -830,6 +900,21 @@ var manager = createAgent({
               <td><code>history</code></td>
               <td>Array</td>
               <td>Complete transcript produced during the current run. It is not automatically reused by a later run.</td>
+            </tr>
+            <tr>
+              <td><code>status</code></td>
+              <td>String</td>
+              <td>Result status: <code>'completed'</code> on success; otherwise <code>'max_iterations_reached'</code>, <code>'timeout'</code>, <code>'aborted'</code>, <code>'schema_validation_failed'</code>, <code>'guardrail_blocked'</code>, or <code>'error'</code>.</td>
+            </tr>
+            <tr>
+              <td><code>iterations</code></td>
+              <td>Number</td>
+              <td>Number of agent-loop turns consumed by this run.</td>
+            </tr>
+            <tr>
+              <td><code>rawResponse</code></td>
+              <td>Object</td>
+              <td>Raw provider response (non-streaming). For streaming, contains <code>{ streamed, model, chunksCount, finishReason }</code>.</td>
             </tr>
           </tbody>
         </table>

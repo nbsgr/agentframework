@@ -5,14 +5,14 @@ export function createClient(provider, baseurl, apikey) {
     var p, b, a;
 
     if (provider && typeof provider === "object") {
-        if (!provider.provider || !(provider.apikey || provider.apiKey || provider.api_key)) {
+        if (!provider.provider) {
             throw new Error(`
 Object must be passed in this format:
 
 {
     provider: "provider-name",
     baseurl: "provider-base-url",
-    apikey: "provider-api-key"
+    apikey: "provider-api-key" // optional when the provider SDK env var is set
 }
 `);
         }
@@ -38,15 +38,9 @@ Object must be passed in this format:
         );
     }
 
-    if (!a || typeof a !== "string" || !a.trim()) {
-        throw new Error(
-            "API key is required and must be a non-empty string."
-        );
-    }
-
     p = p.trim().toLowerCase() === "anthropic" ? "anthropic" : "openai-compatible";
     b = b ? b.trim() : "https://api.anthropic.com";
-    a = a.trim();
+    a = (typeof a === "string" && a.trim()) ? a.trim() : undefined;
 
     var client;
 

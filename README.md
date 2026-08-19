@@ -287,37 +287,133 @@ function webUiPermissionHandler(toolName, args, toolId) {
 }
 ```
 
----
-
-## 🤖 Subagents as Tools
-
-Pass any subagent instance directly into `tools: [ subAgent ]` to enable multi-agent delegation:
+### 3. Async UI / Resumable `permissionHandler` (callback style)
+Your handler receives a fourth `permissionApi` argument with `approve()`, `deny()` and `resolve(true|false)`. The agent **pauses the loop** until one of them is called — perfect for UI buttons, HTTP approval endpoints, or long-running reviews:
 
 ```javascript
-// 1. Create a specialized Research Agent
+function asyncUiPermissionHandler(toolName, args, toolId, permissionApi) {
+  // 1. Render a "Pending Approval" card in your UI
+  renderApprovalCard({
+    toolName: toolName,
+    args: args,
+    onAllow: function onAllow() { permissionApi.resolve(true); }, // resumes loop
+    onDeny: function onDeny() { permissionApi.deny(); }           // resumes loop (blocked)
+  });
+  // No promise returned needed — the loop waits for resolve()/approve()/deny().
+}
+
+var agent = createAgent({
+  name: 'UI Review Agent',
+  provider: 'openai-compatible',
+  baseurl: 'http://localhost:11434/v1',
+  apikey: 'ollama',
+  model: 'qwen2.5-coder:7b',
+  tools: [ deleteFile ],
+  needsApproval: ['delete_file'],
+  permissionHandler: asyncUiPermissionHandler
+});
+```
+
+Both styles are supported and **first-to-resolve wins**:
+- **Promise-return style**: `async (toolName, args, toolId) => true | false`
+- **Callback style**: `(toolName, args, toolId, permissionApi)` → call `permissionApi.resolve(true)`, `permissionApi.approve()`, or `permissionApi.deny()`
+
+The loop emits `permission_request` / `permission_response` (with `approved: true|false`) events via `onEvent`, and a denial is fed back to the model as `Permission denied by user` so the agent stops and reports it.
+
+---
+
+## 🤖 Subagents as Tools (Full-Agent Delegation)
+
+Subagents are created **exactly like the main agent** — `createAgent()` — and then passed as tools.
+The LLM decides at run time whether to do the task itself, delegate it whole, or split it into
+sub-tasks across multiple subagents (coordinated / planned), including **running several subagents
+in parallel**.
+
+### 1. Create subagents like normal agents, pass them as tools
+
+```javascript
+// 1. Create specialized subagents (identical API to the main agent)
 var researcher = createAgent({
-  name: 'Researcher',
+  name: 'Researcher',                       // becomes delegate_to_researcher tool
   instructions: 'You research topics and summarize key findings.',
+  provider: 'openai-compatible',
+  baseurl: 'http://localhost:11434/v1',
+  apikey: 'ollama',
+  model: 'qwen2.5-coder:7b',
+  tools: [ searchWeb ],                     // subagent has its own tools
+  subagents: [ domainExpert ]               // subagent can have its own subagents (nesting)
+});
+
+var writer = createAgent({
+  name: 'Writer',
+  instructions: 'You draft and save summary memos.',
   provider: 'openai-compatible',
   baseurl: 'http://localhost:11434/v1',
   apikey: 'ollama',
   model: 'qwen2.5-coder:7b'
 });
 
-// 2. Pass researcher directly as a tool to Manager Agent!
+// 2. Pass them to the manager — they appear as delegate_to_<name> tools
 var manager = createAgent({
   name: 'Manager',
-  instructions: 'Delegate research tasks to the Researcher agent.',
+  instructions: 'Split research and writing into sub-tasks and delegate.',
   provider: 'openai-compatible',
   baseurl: 'http://localhost:11434/v1',
   apikey: 'ollama',
   model: 'qwen2.5-coder:7b',
-  
-  tools: [ researcher ] // 👈 Available as transfer_to_researcher tool!
+  parallelTools: true,                       // run delegated subagents concurrently
+  subagents: [ researcher, writer ]          // 👈 same as tools: [ researcher, writer ]
 });
 
-var result = await manager.run('Research quantum computing breakthroughs.');
+var result = await manager.run('Research quantum computing and write a summary.');
+// result.toolCalls: [ { name: 'delegate_to_researcher', args, output },
+//                     { name: 'delegate_to_writer', args, output } ]
 ```
+
+### 2. Subagents are full agents (recursion, HIL, guardrails)
+
+A subagent runs its **own complete agent loop** with the same capabilities as the main agent:
+
+- **Recursion**: a subagent can itself have `subagents` / `tools` containing other agents
+  (like a loop inside a loop — each with its own data and tools).
+- **Own tools + tool round-trip**: tool calls, args, and execution output are re-fed to the subagent's loop.
+- **HIL approvals inside a subagent**: tools available to the subagent can declare
+  `needsApproval: true`, and the subagent's own `permissionHandler` (same `permissionApi`
+  callback/promise flow) gates them.
+- **Permission cascade**: if a subagent defines no `permissionHandler` of its own, the parent's
+  handler is automatically used for the subagent run. If the subagent has its own, its handler wins.
+- **Guardrails & structured output**: `inputGuardrails` / `toolGuardrails` / `outputGuardrails` /
+  `outputSchema` all apply inside the subagent's own loop.
+- **Usage bubbling**: subagent token usage is added to the parent's `result.usage` and
+  `agent.getUsage()`.
+- **Execution inheritance**: when the parent runs non-streaming, delegations inherit that
+  `stream:false` (no streaming-mismatch failures); a live `client` override on the parent run is
+  reused by subagents that target the same endpoint (e.g. one shared mock/API key), while a
+  subagent with its own distinct provider keeps its connection.
+- **Event forwarding**: subagent events surface on the parent's `onEvent` as
+  `{ type: 'subagent_event', subagent: 'Researcher', event: { ... } }`.
+
+### 3. Guard the delegation itself
+
+The delegation tool can require approval before the subagent is invoked:
+
+```js
+var gated = createSubagentTool(researcher, { needsApproval: true });
+// or in config: needsApproval: ['delegate_to_researcher']
+```
+
+### 4. Custom tool name / description
+
+```js
+createSubagentTool(researcher, {
+  name: 'do_research',
+  description: 'Delegate research work. Returns findings.',
+  needsApproval: false
+});
+```
+
+Subagent delegation, nesting, parallel coordination, and in-subagent HIL flows are verified
+deterministically in `test/test_subagent_full_agents.js`.
 
 ---
 
@@ -465,6 +561,8 @@ var result = await agent.run('Describe this diagram', {
 ## 📜 Conversation History & Session Management
 
 `coderun-agent` is **stateless across separate `.run()` calls**. It never automatically reuses a previous run. The caller owns continuation history and must pass it explicitly. The agent does not expose implicit history-management methods; this prevents accidental context leakage between tasks.
+
+> Note: while conversation history is per-run, aggregate token usage and the agent state machine are shared across runs — use `agent.getUsage()` (reset via `agent.resetContext()`) and `agent.getState()` / `agent.onStateChange()` for cross-run observability.
 
 To pass multi-turn conversation history into a run, supply `history` in options:
 

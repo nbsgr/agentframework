@@ -15,7 +15,7 @@ async function testDeepSeekReasoning() {
   });
 
   var result = await agent.run('How many r\'s are in strawberry?', {
-    onEvent: function handleEvent(evt) {
+    onEvent(evt) {
       if (evt.type === 'thinking') {
         process.stdout.write(evt.chunk);
       }

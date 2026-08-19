@@ -15,9 +15,9 @@ async function runSubagentTest() {
       properties: { query: { type: 'string' } },
       required: ['query']
     },
-    execute: async function search(args) {
+    async execute(args) {
       toolCallsReceived.push({ tool: 'search_web', args: args });
-      return 'Found: Coderun Agent v1.0.5';
+      return 'Found: Coderun Agent v1.0.6';
     }
   });
 
@@ -29,7 +29,7 @@ async function runSubagentTest() {
       properties: { to: { type: 'string' }, message: { type: 'string' } },
       required: ['to', 'message']
     },
-    execute: async function send(args) {
+    async execute(args) {
       toolCallsReceived.push({ tool: 'send_email', args: args });
       return 'Email dispatched to ' + args.to;
     }
@@ -75,12 +75,13 @@ async function runSubagentTest() {
   var mockContext = {
     workspaceFolder: process.cwd(),
     signal: undefined,
-    onEvent: function recordEvent(evt) { eventsEmitted.push(evt); },
+    onEvent(evt) { eventsEmitted.push(evt); },
     recordUsage: mockRecordUsage
   };
 
   var originalRun = searchAgent.run;
-  searchAgent.run = async function mockSearchRun(taskPrompt, options) {
+  searchAgent.run = mockSearchRun;
+async function mockSearchRun(taskPrompt, options) {
     if (typeof options.onEvent === 'function') {
       options.onEvent({ type: 'thinking', chunk: 'Searching...' });
     }

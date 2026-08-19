@@ -7,7 +7,7 @@ async function testAnthropicToolContinuation() {
   var capturedRequest = null;
   var fakeClient = {
     messages: {
-      create: async function create(request) {
+      async create(request) {
         capturedRequest = request;
         return {
           content: [{ type: 'text', text: 'continued' }],
@@ -42,7 +42,7 @@ async function testOpenAIToolMetadataIsInternal() {
   var fakeClient = {
     chat: {
       completions: {
-        create: async function create(request) {
+        async create(request) {
           capturedRequest = request;
           return {
             choices: [{ message: { content: 'done', tool_calls: [] } }],

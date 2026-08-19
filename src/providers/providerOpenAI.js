@@ -1,70 +1,6 @@
 // providerOpenAI.js — OpenAI & OpenAI-Compatible provider using official OpenAI SDK (ESM, No classes)
 import OpenAI from 'openai';
-
-function sleep(ms, signal) {
-  return new Promise(function resolveSleep(resolve, reject) {
-    var timer = setTimeout(finishSleep, ms);
-
-    if (signal) {
-      if (signal.aborted) {
-        finishAbort();
-        return;
-      }
-      signal.addEventListener('abort', finishAbort, { once: true });
-    }
-
-    function finishSleep() {
-      cleanup();
-      resolve();
-    }
-
-    function finishAbort() {
-      cleanup();
-      var abortError = new Error('Operation was aborted');
-      abortError.name = 'AbortError';
-      reject(abortError);
-    }
-
-    function cleanup() {
-      clearTimeout(timer);
-      if (signal) {
-        signal.removeEventListener('abort', finishAbort);
-      }
-    }
-  });
-}
-
-async function retryWithBackoff(fn, maxRetries, initialDelayMs, signal) {
-  var retries = typeof maxRetries === 'number' ? maxRetries : 3;
-  var delay = initialDelayMs || 1000;
-  var attempt = 0;
-  while (attempt <= retries) {
-    if (signal && signal.aborted) {
-      throw createAbortError();
-    }
-
-    try {
-      return await fn();
-    } catch (err) {
-      if (signal && signal.aborted) {
-        throw err;
-      }
-      attempt++;
-      if (attempt > retries) {
-        throw err;
-      }
-      var status = err ? (err.status || err.statusCode) : undefined;
-      var code = err ? err.code : undefined;
-      var msg = err ? String(err.message || '') : '';
-      var isRetryable = status === 429 || (status >= 500 && status <= 599) || code === 'ECONNRESET' || code === 'ETIMEDOUT' || msg.indexOf('fetch failed') >= 0;
-      if (!isRetryable) {
-        throw err;
-      }
-      await sleep(delay, signal);
-      delay *= 2;
-    }
-  }
-}
+import { retryWithBackoff, streamWithBackoff } from './retry.js';
 
 export function chat(messages, options) {
   options = options || {};
@@ -76,11 +12,11 @@ export function chat(messages, options) {
   var onStream = options.onStream;
   var maxRetries = typeof options.maxRetries === 'number' ? options.maxRetries : 3;
 
-  var client = options.client || new OpenAI({
-    apiKey: apiKey,
-    baseURL: baseURL,
-    dangerouslyAllowSVG: true
-  });
+  var clientOptions = { apiKey: apiKey, baseURL: baseURL };
+  if (options.allowSvg === true) {
+    clientOptions.dangerouslyAllowSVG = true;
+  }
+  var client = options.client || new OpenAI(clientOptions);
 
   var requestParams = {
     model: model,
@@ -117,20 +53,33 @@ export function chat(messages, options) {
     requestParams.temperature = options.temperature;
   }
 
-  return retryWithBackoff(function executeOpenAIChat() {
-    if (isStream) {
-      requestParams.stream_options = { include_usage: true };
-      return handleStreaming(client, requestParams, onStream, options.signal);
-    } else {
-      return handleNonStreaming(client, requestParams, options.signal);
-    }
-  }, maxRetries, 1000, options.signal);
-}
+  var maxTokens = typeof options.max_tokens === 'number' ? options.max_tokens : (typeof options.maxTokens === 'number' ? options.maxTokens : undefined);
+  if (maxTokens !== undefined) {
+    requestParams.max_tokens = maxTokens;
+  }
 
-function createAbortError() {
-  var abortError = new Error('Operation was aborted');
-  abortError.name = 'AbortError';
-  return abortError;
+  if (isStream) {
+    var streamEmitted = false;
+    function wrapOpenAIStream(evt) {
+      streamEmitted = true;
+      if (typeof onStream === 'function') {
+        onStream(evt);
+      }
+    }
+    var wrappedOnStream = wrapOpenAIStream;
+    return streamWithBackoff(function executeOpenAIStream() {
+      if (options.streamOptions !== false && options.stream_options !== false) {
+        requestParams.stream_options = (options.streamOptions && typeof options.streamOptions === 'object') ? options.streamOptions : (options.stream_options && typeof options.stream_options === 'object' ? options.stream_options : { include_usage: true });
+      }
+      return handleStreaming(client, requestParams, wrappedOnStream, options.signal);
+    }, maxRetries, 1000, options.signal, function anyStreamChunk() {
+      return streamEmitted;
+    });
+  }
+
+  return retryWithBackoff(function executeOpenAIChat() {
+    return handleNonStreaming(client, requestParams, options.signal);
+  }, maxRetries, 1000, options.signal);
 }
 
 function cleanJsonArgumentString(rawStr) {
@@ -238,8 +187,14 @@ async function handleStreaming(client, requestParams, onStream, signal) {
   var reasoningKey = null;
   var toolCallsMap = {};
   var usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  var chunkCount = 0;
+  var finishReason = null;
+  var responseModel = requestParams.model || '';
 
   for await (var chunk of stream) {
+    chunkCount++;
+    if (chunk.model) responseModel = chunk.model;
+
     if (chunk.usage) {
       usage.prompt_tokens = chunk.usage.prompt_tokens || usage.prompt_tokens;
       usage.completion_tokens = chunk.usage.completion_tokens || usage.completion_tokens;
@@ -247,58 +202,61 @@ async function handleStreaming(client, requestParams, onStream, signal) {
     }
 
     var choice = (chunk.choices && chunk.choices.length > 0) ? chunk.choices[0] : null;
-    if (choice && choice.delta) {
-      var delta = choice.delta;
-      var rChunk = null;
-      var currentKey = null;
+    if (choice) {
+      if (choice.finish_reason) finishReason = choice.finish_reason;
+      if (choice.delta) {
+        var delta = choice.delta;
+        var rChunk = null;
+        var currentKey = null;
 
-      if (delta.reasoning_content !== undefined && delta.reasoning_content !== null) {
-        currentKey = 'reasoning_content';
-        rChunk = delta.reasoning_content;
-      } else if (delta.thinking !== undefined && delta.thinking !== null) {
-        currentKey = 'thinking';
-        rChunk = delta.thinking;
-      } else if (delta.reasoning !== undefined && delta.reasoning !== null) {
-        currentKey = 'reasoning';
-        rChunk = delta.reasoning;
-      }
-
-      if (currentKey && rChunk) {
-        reasoningKey = currentKey;
-        fullReasoning += rChunk;
-        if (typeof onStream === 'function') {
-          onStream({
-            type: 'thinking',
-            reasoningKey: currentKey,
-            chunk: rChunk,
-            fullReasoning: fullReasoning
-          });
+        if (delta.reasoning_content !== undefined && delta.reasoning_content !== null) {
+          currentKey = 'reasoning_content';
+          rChunk = delta.reasoning_content;
+        } else if (delta.thinking !== undefined && delta.thinking !== null) {
+          currentKey = 'thinking';
+          rChunk = delta.thinking;
+        } else if (delta.reasoning !== undefined && delta.reasoning !== null) {
+          currentKey = 'reasoning';
+          rChunk = delta.reasoning;
         }
-      }
 
-      if (delta.content) {
-        fullContent += delta.content;
-        if (typeof onStream === 'function') {
-          onStream({
-            type: 'stream',
-            chunk: delta.content,
-            fullContent: fullContent
-          });
-        }
-      }
-
-      if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
-        for (var t = 0; t < delta.tool_calls.length; t++) {
-          var dtc = delta.tool_calls[t];
-          var idx = dtc.index !== undefined ? dtc.index : t;
-          if (!toolCallsMap[idx]) {
-            toolCallsMap[idx] = { id: dtc.id || ('call_' + idx), name: '', arguments: '' };
+        if (currentKey && rChunk) {
+          reasoningKey = currentKey;
+          fullReasoning += rChunk;
+          if (typeof onStream === 'function') {
+            onStream({
+              type: 'thinking',
+              reasoningKey: currentKey,
+              chunk: rChunk,
+              fullReasoning: fullReasoning
+            });
           }
-          if (dtc.id) toolCallsMap[idx].id = dtc.id;
-          if (dtc.extra_content !== undefined) toolCallsMap[idx].extra_content = dtc.extra_content;
-          if (dtc.function) {
-            if (dtc.function.name) toolCallsMap[idx].name += dtc.function.name;
-            if (dtc.function.arguments) toolCallsMap[idx].arguments += dtc.function.arguments;
+        }
+
+        if (delta.content) {
+          fullContent += delta.content;
+          if (typeof onStream === 'function') {
+            onStream({
+              type: 'stream',
+              chunk: delta.content,
+              fullContent: fullContent
+            });
+          }
+        }
+
+        if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
+          for (var t = 0; t < delta.tool_calls.length; t++) {
+            var dtc = delta.tool_calls[t];
+            var idx = dtc.index !== undefined ? dtc.index : t;
+            if (!toolCallsMap[idx]) {
+              toolCallsMap[idx] = { id: dtc.id || ('call_' + idx), name: '', arguments: '' };
+            }
+            if (dtc.id) toolCallsMap[idx].id = dtc.id;
+            if (dtc.extra_content !== undefined) toolCallsMap[idx].extra_content = dtc.extra_content;
+            if (dtc.function) {
+              if (dtc.function.name) toolCallsMap[idx].name += dtc.function.name;
+              if (dtc.function.arguments) toolCallsMap[idx].arguments += dtc.function.arguments;
+            }
           }
         }
       }
@@ -332,6 +290,11 @@ async function handleStreaming(client, requestParams, onStream, signal) {
     reasoningKey: reasoningKey,
     tool_calls: formattedToolCalls,
     usage: usage,
-    rawResponse: { streamed: true }
+    rawResponse: {
+      streamed: true,
+      model: responseModel,
+      chunksCount: chunkCount,
+      finishReason: finishReason
+    }
   };
 }

@@ -19,6 +19,82 @@ function internalCliPrompt(toolName, toolArgs) {
   });
 }
 
+/**
+ * Human-In-The-Loop permission gate.
+ *
+ * The agent loop PAUSES here until the caller decides. The provided
+ * permissionHandler is called as: handler(toolName, toolArgs, callId, permissionApi)
+ * where permissionApi exposes approve(), deny() and resolve(bool) so a UI or
+ * console can decide asynchronously. The handler may instead return a boolean
+ * or a Promise<boolean>; whichever resolves first wins.
+ */
+function requestToolPermission(permissionHandlerFn, toolName, toolArgs, callId, emitEvent) {
+  if (typeof permissionHandlerFn !== 'function') {
+    return internalCliPrompt(toolName, toolArgs);
+  }
+
+  var settled = false;
+  var approvalValue = false;
+  var resolvePermissionPromise = null;
+
+  function finishPermission(value) {
+    if (settled) return;
+    settled = true;
+    approvalValue = value === true;
+    emitEvent({ type: 'permission_response', tool: toolName, args: toolArgs, callId: callId, approved: approvalValue });
+    if (typeof resolvePermissionPromise === 'function') {
+      resolvePermissionPromise(approvalValue);
+    }
+  }
+
+  var permissionPromise = new Promise(function createPermissionPromise(resolveFn) {
+    resolvePermissionPromise = resolveFn;
+  });
+
+  var permissionApi = {
+    tool: toolName,
+    toolName: toolName,
+    args: toolArgs,
+    callId: callId,
+    requestId: callId,
+    message: 'Agent requests permission to execute tool "' + toolName + '" with args ' + JSON.stringify(toolArgs || {}) + '.',
+    approve: approvePermission,
+    deny: denyPermission,
+    resolve: resolvePermissionDecision
+  };
+
+  function approvePermission() {
+    finishPermission(true);
+  }
+
+  function denyPermission() {
+    finishPermission(false);
+  }
+
+  function resolvePermissionDecision(value) {
+    finishPermission(value === true);
+  }
+
+  var handlerResult;
+  try {
+    emitEvent({ type: 'permission_request', tool: toolName, args: toolArgs, callId: callId, requestId: callId, message: permissionApi.message });
+    handlerResult = permissionHandlerFn(toolName, toolArgs, callId, permissionApi);
+  } catch (permissionError) {
+    emitEvent({ type: 'permission_error', tool: toolName, callId: callId, error: permissionError.message || String(permissionError) });
+    finishPermission(false);
+  }
+
+  if (handlerResult && typeof handlerResult.then === 'function') {
+    Promise.resolve(handlerResult).then(function resolveHandlerValue(value) {
+      finishPermission(value === true);
+    }, function rejectHandlerValue() {
+      finishPermission(false);
+    });
+  }
+
+  return permissionPromise;
+}
+
 function normalizeToolResult(toolName, toolArgs, rawResult) {
   if (rawResult && rawResult.output !== undefined) {
     return {
@@ -82,6 +158,7 @@ export async function runAgentLoop(userPrompt, config, options) {
   var toolGuardrails = options.toolGuardrails || config.toolGuardrails || [];
   var outputGuardrails = options.outputGuardrails || config.outputGuardrails || [];
   var outputSchema = options.outputSchema || config.outputSchema;
+  var maxToolOutputChars = typeof options.maxToolOutputChars === 'number' ? options.maxToolOutputChars : 6000;
   var runController = null;
   var timeoutHandle = null;
   var timedOut = false;
@@ -163,10 +240,12 @@ export async function runAgentLoop(userPrompt, config, options) {
   var accumulatedToolCalls = [];
   var iteration = 0;
   var finalContent = '';
+  var iterationStreamedThinking = false;
   var provider = createProvider(config);
 
   function handleStreamChunk(streamChunk) {
     if (streamChunk.type === 'thinking' && streamChunk.chunk) {
+      iterationStreamedThinking = true;
       accumulatedReasoning += streamChunk.chunk;
     }
     emitEvent(streamChunk);
@@ -186,18 +265,24 @@ export async function runAgentLoop(userPrompt, config, options) {
 
     emitEvent({ type: 'tool_call', tool: toolName, args: toolArgs, id: tc.id });
 
-    var toolDef = null;
-    for (var td = 0; td < toolsDefinition.length; td++) {
-      var def = toolsDefinition[td];
-      var nameInDef = (def.function && def.function.name) ? def.function.name : (def.name || '');
-      if (nameInDef === toolName) {
-        toolDef = def;
-        break;
+    var toolEntry = (options.toolsMap && options.toolsMap[toolName]) ? options.toolsMap[toolName] : null;
+    var toolDef = (toolEntry && toolEntry.definition) ? toolEntry.definition : null;
+
+    if (!toolDef) {
+      for (var td = 0; td < toolsDefinition.length; td++) {
+        var def = toolsDefinition[td];
+        var nameInDef = (def.function && def.function.name) ? def.function.name : (def.name || '');
+        if (nameInDef === toolName) {
+          toolDef = def;
+          break;
+        }
       }
     }
 
     var requiresApproval = false;
-    if (toolDef) {
+    if (toolEntry && (toolEntry.needsApproval === true || toolEntry.requiresApproval === true)) {
+      requiresApproval = true;
+    } else if (toolDef) {
       if (toolDef.needsApproval === true || toolDef.requiresApproval === true) {
         requiresApproval = true;
       } else if (toolDef.function && (toolDef.function.needsApproval === true || toolDef.function.requiresApproval === true)) {
@@ -209,11 +294,7 @@ export async function runAgentLoop(userPrompt, config, options) {
     if (requiresApproval) {
       state.transition('waiting', { tool: toolName, args: toolArgs });
       emitEvent({ type: 'state_changed', state: 'waiting', tool: toolName, args: toolArgs, id: tc.id });
-      if (typeof permissionHandler === 'function') {
-        approved = await permissionHandler(toolName, toolArgs, tc.id);
-      } else {
-        approved = await internalCliPrompt(toolName, toolArgs);
-      }
+      approved = await requestToolPermission(permissionHandler, toolName, toolArgs, tc.id, emitEvent);
     }
 
     state.transition('executing', { tool: toolName, args: toolArgs });
@@ -231,7 +312,7 @@ export async function runAgentLoop(userPrompt, config, options) {
         }
       };
     } else if (approved) {
-      var toolSchema = toolDef && toolDef.function ? toolDef.function.parameters : null;
+      var toolSchema = (toolDef && toolDef.function ? toolDef.function.parameters : (toolEntry && (toolEntry.parameters || (toolEntry.function && toolEntry.function.parameters)) ? (toolEntry.parameters || toolEntry.function.parameters) : null));
       if (typeof options.validateToolArguments === 'function') {
         var validation = options.validateToolArguments(toolArgs, toolSchema);
         if (!validation.valid) {
@@ -253,7 +334,11 @@ export async function runAgentLoop(userPrompt, config, options) {
           needsApproval: requiresApproval,
           signal: signal,
           onEvent: emitEvent,
-          recordUsage: recordUsage
+          recordUsage: recordUsage,
+          permissionHandler: permissionHandler,
+          parallelTools: isParallel,
+          stream: isStream,
+          client: options.providerClient
         };
 
         if (Array.isArray(toolGuardrails) && toolGuardrails.length > 0) {
@@ -279,9 +364,9 @@ export async function runAgentLoop(userPrompt, config, options) {
             } else if (typeof executeTool === 'function') {
               toolResult = normalizeToolResult(toolName, toolArgs, await executeTool(toolName, toolArgs, toolContext));
             } else {
-              var availableToolNames = Object.keys(options.toolsMap || {}).filter(function filterUnique(k) {
-                return k.indexOf('_') >= 0 || k.toLowerCase() === k;
-              }).join(', ');
+              var availableToolNames = toolsDefinition.map(function getToolDefName(d) {
+                return (d.function && d.function.name) ? d.function.name : (d.name || '');
+              }).filter(Boolean).join(', ');
               toolResult = {
                 toolName: toolName,
                 args: toolArgs,
@@ -293,10 +378,11 @@ export async function runAgentLoop(userPrompt, config, options) {
               };
             }
           } catch (execErr) {
+            var execErrorMessage = getErrorMessage(execErr);
             toolResult = {
               toolName: toolName,
               args: toolArgs,
-              output: { success: false, error: execErr.message, content: execErr.message }
+              output: { success: false, error: execErrorMessage, content: execErrorMessage }
             };
           }
         }
@@ -326,8 +412,29 @@ export async function runAgentLoop(userPrompt, config, options) {
     return JSON.stringify(toolResult.output);
   }
 
+  function truncateToolOutput(value) {
+    var str = typeof value === 'string' ? value : String(value);
+    if (maxToolOutputChars <= 0 || str.length <= maxToolOutputChars) return str;
+    return str.slice(0, maxToolOutputChars) + ' ... [truncated]';
+  }
+
+  function getErrorMessage(err) {
+    if (err && typeof err === 'object' && typeof err.message === 'string' && err.message) {
+      return err.message;
+    }
+    if (typeof err === 'string' && err) {
+      return err;
+    }
+    try {
+      return JSON.stringify(err);
+    } catch (_) {
+      return String(err);
+    }
+  }
+
   while (iteration < maxIterations) {
     iteration++;
+    iterationStreamedThinking = false;
     emitEvent({ type: 'iteration_start', iteration: iteration });
 
     var messages = buildMessages(userPrompt, history, workspace, Object.assign({}, options, { promptAlreadyInHistory: true }));
@@ -346,17 +453,19 @@ export async function runAgentLoop(userPrompt, config, options) {
         stream: isStream,
         tools: toolsDefinition.length > 0 ? toolsDefinition : undefined,
         temperature: options.temperature !== undefined ? options.temperature : config.temperature,
+        maxTokens: options.maxTokens !== undefined ? options.maxTokens : (config.maxTokens !== undefined ? config.maxTokens : config.max_tokens),
         toolChoice: options.toolChoice || options.tool_choice || config.toolChoice || config.tool_choice,
         responseFormat: options.responseFormat || options.response_format || config.responseFormat || config.response_format,
         maxRetries: options.maxRetries !== undefined ? options.maxRetries : config.maxRetries,
         signal: signal,
         images: options.images || (userPrompt && typeof userPrompt === 'object' ? userPrompt.images : null),
+        streamOptions: options.streamOptions !== undefined ? options.streamOptions : config.streamOptions,
         onStream: handleStreamChunk
       });
 
       lastRawResponse = response.rawResponse;
 
-      if (response.reasoningContent) {
+      if (response.reasoningContent && !iterationStreamedThinking) {
         accumulatedReasoning += response.reasoningContent;
       }
 
@@ -400,7 +509,7 @@ export async function runAgentLoop(userPrompt, config, options) {
               args: resItem.args,
               output: resItem.toolResult ? resItem.toolResult.output : null
             });
-            var resStr = getToolResultString(resItem.toolResult);
+            var resStr = truncateToolOutput(getToolResultString(resItem.toolResult));
             history.push({
               role: 'tool',
               tool_call_id: resItem.id,
@@ -417,7 +526,7 @@ export async function runAgentLoop(userPrompt, config, options) {
               args: singleRes.args,
               output: singleRes.toolResult ? singleRes.toolResult.output : null
             });
-            var resultString = getToolResultString(singleRes.toolResult);
+            var resultString = truncateToolOutput(getToolResultString(singleRes.toolResult));
             history.push({
               role: 'tool',
               tool_call_id: singleRes.id,
@@ -535,11 +644,12 @@ export async function runAgentLoop(userPrompt, config, options) {
       }
     } catch (err) {
       clearRunTimeout();
-      state.transition('failed', { error: err.message });
-      emitEvent({ type: 'error', error: err.message });
+      var runErrorMessage = getErrorMessage(err);
+      state.transition('failed', { error: runErrorMessage });
+      emitEvent({ type: 'error', error: runErrorMessage });
       return {
         success: false,
-        error: err.message,
+        error: runErrorMessage,
         content: finalContent,
         thinking: accumulatedReasoning,
         toolCalls: accumulatedToolCalls,

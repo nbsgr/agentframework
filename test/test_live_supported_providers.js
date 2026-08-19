@@ -3,7 +3,7 @@ import { createAgent, tool } from '../index.js';
 
 function createLiveTool() {
   function getProjectStatus(args) {
-    return 'The project is coderun-agent version 1.0.5 and the live tool executed successfully.';
+    return 'The project is coderun-agent version 1.0.6 and the live tool executed successfully.';
   }
 
   return tool({
@@ -139,7 +139,7 @@ async function runLiveTests() {
     await runProviderTest('opencode', {
       provider: 'openai-compatible',
       baseUrl: 'https://opencode.ai/zen/v1',
-      apiKey: "opencode-api-key",
+      apiKey: process.env.OPENCODE_API_KEY || 'sk-placeholder',
       model: 'hy3-free',
       stream: true,
       tools: [createLiveTool()]
@@ -153,7 +153,7 @@ async function runLiveTests() {
     await runProviderTest('gemini', {
       provider: 'openai-compatible',
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-      apiKey: "gemin_api_key",
+      apiKey: process.env.GEMINI_API_KEY || 'AIza-placeholder',
       model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
       stream: geminiStream,
       tools: geminiNoTools ? [] : [createLiveTool()]
