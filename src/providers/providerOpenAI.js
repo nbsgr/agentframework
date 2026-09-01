@@ -16,7 +16,8 @@ export function chat(messages, options) {
   if (options.allowSvg === true) {
     clientOptions.dangerouslyAllowSVG = true;
   }
-  var client = options.client || new OpenAI(clientOptions);
+  var rawClient = options.client;
+  var client = (rawClient && rawClient.client) ? rawClient.client : (rawClient || new OpenAI(clientOptions));
 
   var requestParams = {
     model: model,

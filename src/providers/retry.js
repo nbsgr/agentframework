@@ -89,7 +89,9 @@ export async function streamWithBackoff(fn, maxRetries, initialDelayMs, signal, 
         throw err;
       }
       if (hasEmitted && hasEmitted()) {
-        throw err;
+        if (!isRetryableTransportError(err)) {
+          throw err;
+        }
       }
       attempt++;
       if (attempt > retries) {

@@ -22,6 +22,10 @@ var testFiles = [
   'test/test_guardrails_pipeline.js',
   'test/test_security_aliases_and_options.js',
   'test/test_config_overrides.js',
+  'test/test_universal_providers.js',
+  'test/test_state_machine.js',
+  'test/test_recovery_engine.js',
+  'test/test_bug_fixes_25.js',
   'test/test_openai_sdk_comparison.js'
 ];
 

@@ -93,14 +93,30 @@ function zodFieldToJsonSchema(field) {
   return defaultSchema;
 }
 
+function extractZodShape(zodSchema) {
+  if (!zodSchema || typeof zodSchema !== 'object') return null;
+  if (zodSchema.shape) {
+    return typeof zodSchema.shape === 'function' ? zodSchema.shape() : zodSchema.shape;
+  }
+  if (zodSchema._def) {
+    if (zodSchema._def.shape) {
+      return typeof zodSchema._def.shape === 'function' ? zodSchema._def.shape() : zodSchema._def.shape;
+    }
+    if (zodSchema._def.schema) {
+      return extractZodShape(zodSchema._def.schema);
+    }
+    if (zodSchema._def.innerType) {
+      return extractZodShape(zodSchema._def.innerType);
+    }
+  }
+  return null;
+}
+
 function zodToJsonSchema(zodSchema) {
   var properties = {};
   var required = [];
 
-  var shape = zodSchema && zodSchema.shape;
-  if (!shape && zodSchema && zodSchema._def && zodSchema._def.shape) {
-    shape = typeof zodSchema._def.shape === 'function' ? zodSchema._def.shape() : zodSchema._def.shape;
-  }
+  var shape = extractZodShape(zodSchema);
 
   if (shape) {
     var keys = Object.keys(shape);
@@ -112,7 +128,7 @@ function zodToJsonSchema(zodSchema) {
 
       properties[key] = zodFieldToJsonSchema(field);
 
-      if (fieldTypeName !== 'ZodOptional' && fieldTypeName !== 'ZodDefault') {
+      if (fieldTypeName !== 'ZodOptional' && fieldTypeName !== 'ZodDefault' && fieldTypeName !== 'ZodNullable') {
         required.push(key);
       }
     }
@@ -353,12 +369,15 @@ function validateSchemaValue(value, schema, location) {
   }
 
   if (schema.anyOf && Array.isArray(schema.anyOf)) {
+    var anyOfErrors = [];
     for (var a = 0; a < schema.anyOf.length; a++) {
-      if (validateSchemaValue(value, schema.anyOf[a], location).valid) {
+      var anyRes = validateSchemaValue(value, schema.anyOf[a], location);
+      if (anyRes.valid) {
         return { valid: true };
       }
+      if (anyRes.error) anyOfErrors.push(anyRes.error);
     }
-    return { valid: false, error: location + ' does not match the required schema.' };
+    return { valid: false, error: location + ' does not match any allowed schema variant: [' + anyOfErrors.join(' | ') + ']' };
   }
 
   var type = schema.type;

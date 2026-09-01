@@ -1,7 +1,10 @@
 // index.js — Main library entry point for coderun-agent (ESM, No classes)
 import { runAgentLoop } from './src/agentLoop.js';
-import { createProvider } from './src/providers/providerManager.js';
-import { createState, getState, onStateChange, resetState } from './src/agentState.js';
+import { createProvider, getProviderName, providerOpenAI, providerAnthropic, providerOllama, providerGemini, providerGroq, providerOpenRouter, providerCompatible } from './src/providers/providerManager.js';
+import { createState, getState, onStateChange, resetState, LABELS, ACTIVE_STATES } from './src/agentState.js';
+import { createRecoveryEngine, diagnoseAndRecover } from './src/recoveryEngine.js';
+import { createPathSecurity, resolveSafePath, isSafePath } from './src/pathSecurity.js';
+import { createFileLockManager, withFileLock, clearAllLocks } from './src/fileLock.js';
 import { createClient } from './src/client.js';
 import { tool, validateTools, validateToolArguments, agentToTool, createSubagentTool } from './src/tools.js';
 import { connectMcpServer } from './src/mcp.js';
@@ -91,6 +94,7 @@ export function createAgent(config) {
       provider: activeClient.provider,
       baseUrl: activeClient.baseurl || activeClient.baseUrl,
       apiKey: activeClient.apikey || activeClient.apiKey,
+      apiType: activeClient.apiType,
       model: mergedModel,
       maxIterations: typeof runOptions.maxIterations === 'number' ? runOptions.maxIterations : (typeof config.maxIterations === 'number' ? config.maxIterations : defaultMaxIterations),
       parallelTools: runOptions.parallelTools !== undefined ? runOptions.parallelTools : config.parallelTools,
@@ -252,5 +256,40 @@ export function createAgent(config) {
   }
 }
 
-export { createProvider, tool, validateTools, validateToolArguments, agentToTool, createSubagentTool, connectMcpServer, getState, onStateChange, resetState, executeInputGuardrails, executeToolGuardrails, executeOutputGuardrails, validateStructuredOutput };
+export {
+  createProvider,
+  getProviderName,
+  providerOpenAI,
+  providerAnthropic,
+  providerOllama,
+  providerGemini,
+  providerGroq,
+  providerOpenRouter,
+  providerCompatible,
+  tool,
+  validateTools,
+  validateToolArguments,
+  agentToTool,
+  createSubagentTool,
+  connectMcpServer,
+  createState,
+  getState,
+  onStateChange,
+  resetState,
+  LABELS,
+  ACTIVE_STATES,
+  createRecoveryEngine,
+  diagnoseAndRecover,
+  createPathSecurity,
+  resolveSafePath,
+  isSafePath,
+  createFileLockManager,
+  withFileLock,
+  clearAllLocks,
+  executeInputGuardrails,
+  executeToolGuardrails,
+  executeOutputGuardrails,
+  validateStructuredOutput
+};
+
 export default createAgent;

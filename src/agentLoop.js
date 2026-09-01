@@ -95,6 +95,29 @@ function requestToolPermission(permissionHandlerFn, toolName, toolArgs, callId, 
   return permissionPromise;
 }
 
+function safeParseArguments(raw) {
+  if (raw && typeof raw === 'object') {
+    return raw;
+  }
+  if (typeof raw !== 'string') {
+    return {};
+  }
+  var cleaned = raw.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  }
+  try {
+    var parsed = JSON.parse(cleaned);
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch (_) {
+    return raw;
+  }
+}
+
+function generateUniqueToolCallId() {
+  return 'call_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 9);
+}
+
 function normalizeToolResult(toolName, toolArgs, rawResult) {
   if (rawResult && rawResult.output !== undefined) {
     return {
@@ -116,11 +139,11 @@ function normalizeToolResult(toolName, toolArgs, rawResult) {
     return {
       toolName: toolName,
       args: toolArgs,
-      output: {
+      output: Object.assign({
         success: rawResult.success !== false,
         content: rawResult.content !== undefined ? String(rawResult.content) : JSON.stringify(rawResult),
         error: rawResult.error
-      }
+      }, rawResult)
     };
   }
 
@@ -261,9 +284,11 @@ export async function runAgentLoop(userPrompt, config, options) {
 
   async function processSingleToolCall(tc) {
     var toolName = tc.function ? tc.function.name : tc.name;
-    var toolArgs = tc.function ? tc.function.arguments : (tc.arguments || {});
+    var rawArgs = tc.function ? tc.function.arguments : (tc.arguments || {});
+    var toolArgs = safeParseArguments(rawArgs);
+    var callId = tc.id || generateUniqueToolCallId();
 
-    emitEvent({ type: 'tool_call', tool: toolName, args: toolArgs, id: tc.id });
+    emitEvent({ type: 'tool_call', tool: toolName, args: toolArgs, id: callId });
 
     var toolEntry = (options.toolsMap && options.toolsMap[toolName]) ? options.toolsMap[toolName] : null;
     var toolDef = (toolEntry && toolEntry.definition) ? toolEntry.definition : null;
@@ -495,18 +520,33 @@ export async function runAgentLoop(userPrompt, config, options) {
         history.push(assistantMsg);
 
 
+        if (signal && signal.aborted) {
+          break;
+        }
+
         if (isParallel && toolCalls.length > 1) {
           var promises = [];
           for (var p = 0; p < toolCalls.length; p++) {
             promises.push(processSingleToolCall(toolCalls[p]));
           }
-          var resolvedResults = await Promise.all(promises);
-          for (var r = 0; r < resolvedResults.length; r++) {
-            var resItem = resolvedResults[r];
+          var settledResults = await Promise.allSettled(promises);
+          for (var r = 0; r < settledResults.length; r++) {
+            var settled = settledResults[r];
+            var currentTc = toolCalls[r] || {};
+            var resItem = settled.status === 'fulfilled' ? settled.value : {
+              id: currentTc.id || generateUniqueToolCallId(),
+              toolName: (currentTc.function && currentTc.function.name) || currentTc.name || 'tool',
+              args: safeParseArguments((currentTc.function && currentTc.function.arguments) || currentTc.arguments),
+              toolResult: {
+                toolName: (currentTc.function && currentTc.function.name) || currentTc.name || 'tool',
+                args: safeParseArguments((currentTc.function && currentTc.function.arguments) || currentTc.arguments),
+                output: { success: false, error: (settled.reason && settled.reason.message) || String(settled.reason) }
+              }
+            };
             accumulatedToolCalls.push({
               id: resItem.id,
               name: resItem.toolName,
-              args: resItem.args,
+              args: safeParseArguments(resItem.args),
               output: resItem.toolResult ? resItem.toolResult.output : null
             });
             var resStr = truncateToolOutput(getToolResultString(resItem.toolResult));
@@ -519,11 +559,14 @@ export async function runAgentLoop(userPrompt, config, options) {
           }
         } else {
           for (var t = 0; t < toolCalls.length; t++) {
+            if (signal && signal.aborted) {
+              break;
+            }
             var singleRes = await processSingleToolCall(toolCalls[t]);
             accumulatedToolCalls.push({
               id: singleRes.id,
               name: singleRes.toolName,
-              args: singleRes.args,
+              args: safeParseArguments(singleRes.args),
               output: singleRes.toolResult ? singleRes.toolResult.output : null
             });
             var resultString = truncateToolOutput(getToolResultString(singleRes.toolResult));
@@ -606,6 +649,7 @@ export async function runAgentLoop(userPrompt, config, options) {
                 thinking: accumulatedReasoning,
                 toolCalls: accumulatedToolCalls,
                 history: history,
+                messages: history,
                 usage: totalUsage,
                 iterations: iteration
               };
@@ -637,6 +681,7 @@ export async function runAgentLoop(userPrompt, config, options) {
           thinking: accumulatedReasoning,
           toolCalls: accumulatedToolCalls,
           history: history,
+          messages: history,
           usage: totalUsage,
           iterations: iteration,
           rawResponse: lastRawResponse
@@ -654,6 +699,7 @@ export async function runAgentLoop(userPrompt, config, options) {
         thinking: accumulatedReasoning,
         toolCalls: accumulatedToolCalls,
         history: history,
+        messages: history,
         usage: totalUsage,
         iterations: iteration,
         status: getFailureStatus(err, timedOut, signal)
@@ -672,6 +718,7 @@ export async function runAgentLoop(userPrompt, config, options) {
       thinking: accumulatedReasoning,
       toolCalls: accumulatedToolCalls,
       history: history,
+      messages: history,
       usage: totalUsage,
       iterations: iteration
     };
@@ -687,6 +734,7 @@ export async function runAgentLoop(userPrompt, config, options) {
     thinking: accumulatedReasoning,
     toolCalls: accumulatedToolCalls,
     history: history,
+    messages: history,
     usage: totalUsage,
     iterations: iteration
   };

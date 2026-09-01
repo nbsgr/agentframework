@@ -79,16 +79,24 @@ function createMcpToolDefinition(client, mcpTool) {
   var toolName = String(mcpTool.name || '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'mcp_tool';
 
   async function executeMcpTool(args, context) {
-    var requestOptions = context && context.signal ? { signal: context.signal } : undefined;
-    var result = await client.callTool({
-      name: toolName,
-      arguments: args || {}
-    }, requestOptions);
-    return {
-      success: result && result.isError !== true,
-      content: getMcpText(result),
-      error: result && result.isError === true ? getMcpText(result) : undefined
-    };
+    try {
+      var requestOptions = context && context.signal ? { signal: context.signal } : undefined;
+      var result = await Promise.resolve(client.callTool({
+        name: toolName,
+        arguments: (args && typeof args === 'object') ? args : {}
+      }, requestOptions));
+      return {
+        success: result && result.isError !== true,
+        content: getMcpText(result),
+        error: result && result.isError === true ? getMcpText(result) : undefined
+      };
+    } catch (mcpErr) {
+      return {
+        success: false,
+        error: mcpErr.message || String(mcpErr),
+        content: 'MCP tool execution failed: ' + (mcpErr.message || String(mcpErr))
+      };
+    }
   }
 
   return {

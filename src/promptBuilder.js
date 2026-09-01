@@ -141,6 +141,32 @@ function pruneHistory(history, maxMessages) {
     flattened.shift();
   }
 
+  // Ensure all tool_calls in assistant messages have matching tool results in pruned history
+  var existingToolResultIds = {};
+  for (var tr = 0; tr < flattened.length; tr++) {
+    if (flattened[tr].role === 'tool' && flattened[tr].tool_call_id) {
+      existingToolResultIds[flattened[tr].tool_call_id] = true;
+    }
+  }
+
+  for (var as = 0; as < flattened.length; as++) {
+    var asMsg = flattened[as];
+    if (asMsg.role === 'assistant' && Array.isArray(asMsg.tool_calls) && asMsg.tool_calls.length > 0) {
+      var validCalls = [];
+      for (var tc = 0; tc < asMsg.tool_calls.length; tc++) {
+        var callItem = asMsg.tool_calls[tc];
+        if (callItem.id && existingToolResultIds[callItem.id]) {
+          validCalls.push(callItem);
+        }
+      }
+      if (validCalls.length > 0) {
+        asMsg.tool_calls = validCalls;
+      } else {
+        delete asMsg.tool_calls;
+      }
+    }
+  }
+
   return flattened;
 }
 
@@ -166,7 +192,17 @@ function formatProviderToolCalls(toolCalls) {
     var toolCall = toolCalls[i] || {};
     var functionCall = toolCall.function || {};
     var rawArguments = toolCall.args !== undefined ? toolCall.args : (toolCall.arguments !== undefined ? toolCall.arguments : functionCall.arguments);
-    var formattedArguments = typeof rawArguments === 'string' ? rawArguments : JSON.stringify(rawArguments || {});
+    var formattedArguments = '{}';
+    if (typeof rawArguments === 'string') {
+      var trimmed = rawArguments.trim();
+      if (trimmed.startsWith('```')) {
+        trimmed = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      }
+      formattedArguments = trimmed;
+    } else if (rawArguments && typeof rawArguments === 'object') {
+      formattedArguments = JSON.stringify(rawArguments);
+    }
+
     var callObj = {
       id: toolCall.id || ('call_' + i),
       type: 'function',
