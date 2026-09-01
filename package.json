@@ -1,6 +1,6 @@
 {
   "name": "coderun-agent",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Standalone, multi-provider AI Agent framework in plain JavaScript",
   "main": "index.js",
   "type": "module",
