@@ -1,6 +1,6 @@
 {
   "name": "coderun-agent",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Standalone, multi-provider AI Agent framework in plain JavaScript",
   "main": "index.js",
   "type": "module",
@@ -29,7 +29,21 @@
     "tool-calling"
   ],
   "exports": {
-    ".": "./index.js"
+    ".": "./index.js",
+    "./traces": "./src/executionTrace.js",
+    "./subagents": "./src/subagentManager.js",
+    "./planning": "./src/planningManager.js",
+    "./planningEngine": "./src/planningEngine.js",
+    "./compaction": "./src/compactionManager.js",
+    "./checkpoints": "./src/checkpointManager.js",
+    "./diffs": "./src/diffManager.js",
+    "./tools": "./src/tools.js",
+    "./state": "./src/agentState.js",
+    "./guardrails": "./src/guardrails.js",
+    "./recovery": "./src/recoveryEngine.js",
+    "./pathSecurity": "./src/pathSecurity.js",
+    "./fileLock": "./src/fileLock.js",
+    "./providers": "./src/providers/providerManager.js"
   },
   "files": [
     "index.js",
@@ -38,7 +52,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/runDeterministicTests.js",
+    "test": "node test/runDeterministicTests.js && node test/test_sdk_exports.js",
+    "test:exports": "node test/test_sdk_exports.js",
     "test:smoke": "node test/runTests.js",
     "test:live": "node test/test_live_supported_providers.js",
     "test:mcp": "node test/test_mcp_filesystem.js"

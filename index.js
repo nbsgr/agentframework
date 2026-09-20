@@ -9,6 +9,13 @@ import { createClient } from './src/client.js';
 import { tool, validateTools, validateToolArguments, agentToTool, createSubagentTool } from './src/tools.js';
 import { connectMcpServer } from './src/mcp.js';
 import { executeInputGuardrails, executeToolGuardrails, executeOutputGuardrails, validateStructuredOutput } from './src/guardrails.js';
+import * as executionTrace from './src/executionTrace.js';
+import * as compactionManager from './src/compactionManager.js';
+import * as planningManager from './src/planningManager.js';
+import * as planningEngine from './src/planningEngine.js';
+import * as checkpointManager from './src/checkpointManager.js';
+import * as diffManager from './src/diffManager.js';
+import * as subagentManager from './src/subagentManager.js';
 
 export function createAgent(config) {
   if (!config || typeof config !== 'object') {
@@ -289,7 +296,14 @@ export {
   executeInputGuardrails,
   executeToolGuardrails,
   executeOutputGuardrails,
-  validateStructuredOutput
+  validateStructuredOutput,
+  executionTrace,
+  compactionManager,
+  planningManager,
+  planningEngine,
+  checkpointManager,
+  diffManager,
+  subagentManager
 };
 
 export default createAgent;
